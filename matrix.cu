@@ -382,8 +382,8 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
     // Histogram
     memset(B->rowPtrs, 0, (B->numRows * (B->numCols/blockDim) + 1) * sizeof(unsigned int));
     for(unsigned int i = 0; i < A->nnz; ++i) {
-        unsigned int row = A->rowIdxs[i];
-        B->rowPtrs[row]++;
+        unsigned int index = A->rowIdxs[i] + (A->colIdxs[i] + 1)/blockDim;
+        B->rowPtrs[index]++;
     }
 
     // Prefix sum

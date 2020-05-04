@@ -14,11 +14,11 @@
 
 
 __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, float bias, unsigned int K, unsigned int N, unsigned int M) {
-    __shared__ unsigned int As_rowPtrs[BLOCKDIM];
+    __shared__ unsigned int As_rowPtrs[BLOCKDIM + 1];
     __shared__ unsigned int As_colIdxs[BLOCKDIM*BLOCKDIM];
     __shared__ float        As_values[BLOCKDIM*BLOCKDIM];
     
-    __shared__ unsigned int Bs_colPtrs[BLOCKDIM];
+    __shared__ unsigned int Bs_colPtrs[BLOCKDIM + 1];
     __shared__ unsigned int Bs_rowIdxs[BLOCKDIM*BLOCKDIM];
     __shared__ float        Bs_values[BLOCKDIM*BLOCKDIM];
 
@@ -37,8 +37,8 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
             nnz_col = 0
 
             if(row < totalRows){
-                As_rowPtrs[threadIdx.y] = A->rowPtrsBlock[row*tilesPerDim+tile];
-                for(unsigned int i = A->rowPtrs[row*tilesPerDim+tile]; i < A->rowPtrs[row*tilesPerDim+tile+1]; ++i){
+                As_rowPtrs[threadIdx.y] = A->rowPtrsBlock[row*tilesPerDim + tile];
+                for(unsigned int i = A->rowPtrs[row*tilesPerDim + tile]; i < A->rowPtrs[row*tilesPerDim + tile + 1]; ++i){
                     As_colIdxs[nnz_row] = A->colIdxs[i];
                     As_values[nnz_row]  = A->values[i];
                     nnz_row += 1
@@ -46,19 +46,31 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
             }
             
             if(col < totalCols){
-                Bs_colPtrs[threadIdx.x] = B->colPtrsBlock[row*tilesPerDim+tile];
-                for(unsigned int i = B->colPtrs[col*tilesPerDim+tile]; i < B->colPtrs[col*tilesPerDim+tile+1]; ++i){
-                    Bs_colPtrs[nnz_col] = B->colPtrs[i];
+                Bs_colPtrs[threadIdx.x] = B->colPtrsBlock[row*tilesPerDim + tile];
+                for(unsigned int i = B->colPtrs[col*tilesPerDim + tile]; i < B->colPtrs[col*tilesPerDim + tile + 1]; ++i){
+                    Bs_rowIdxs[nnz_col] = B->rowIdxs[i];
                     Bs_values[nnz_col]  = B->values[i];
                     nnz_col += 1
                 }
             }
             
+        } else if(threadIdx.x == 0 && threadIdx.y == 1) {
+            if(blockDim.y * (blockIdx.y + 1) > totalRows) {
+                As_rowPtrs[totalRows % BLOCKDIM] = A->rowPtrsBlock[(totalRows - 1)*tilesPerDim + tile] + (A->rowPtrs[(totalRows - 1)*tilesPerDim + tile + 1] - A->rowPtrs[(totalRows - 1)*tilesPerDim + tile]);
+            } else {
+                As_rowPtrs[blockDim] = A->rowPtrsBlock[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile] + (A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile + 1] - A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile]);
+            }
+            
+            if(blockDim.x * (blockIdx.x + 1) > totalCols) {
+                Bs_colPtrs[totalCols % BLOCKDIM] = B->colPtrsBlock[(totalCols - 1)*tilesPerDim + tile] + (B->colPtrs[(totalCols - 1)*tilesPerDim + tile + 1] - B->colPtrs[(totalCols - 1)*tilesPerDim + tile]);
+            } else {
+                Bs_colPtrs[blockDim] = B->colPtrsBlock[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile] + (Bs_colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile + 1] - Bs_colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile]);
+            }      
         }
         __syncthreads();
 
         // Compute with tile
-        if(row<M && col <N){
+        if(row < M && col < N){
             unsigned int nnzA = As_rowPtrs[threadIdx.y + 1] - A->rowPtrs[threadIdx.y];
             unsigned int nnzB = Bs_colPtrs[threadIdx.x + 1] - B->colPtrs[threadIdx.x];
             if(nnzA > 0 && nnzB > 0) {
