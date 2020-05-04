@@ -376,44 +376,71 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
         exit(1);
     }
 
+    unsigned int tilesPerRow = (B->numCols+BLOCKDIM-1)/BLOCKDIM; 
+    unsigned int tilesPerCol = (B->numRows+BLOCKDIM-1)/BLOCKDIM;
+
     // Set nonzeros
     B->nnz = A->nnz;
 
     // Histogram
-    memset(B->rowPtrs, 0, (B->numRows * (B->numCols/blockDim) + 1) * sizeof(unsigned int));
+    memset(B->rowPtrs, 0, (B->numRows * tilesPerRow  + 1)*sizeof(unsigned int));
     for(unsigned int i = 0; i < A->nnz; ++i) {
-        unsigned int index = A->rowIdxs[i] + (A->colIdxs[i] + 1)/blockDim;
-        B->rowPtrs[index]++;
+        unsigned int row = A->rowIdxs[i];
+        unsigned int col = A->colIdxs[i];
+        unsigned int tile = row * tilesPerRow +  col/BLOCKDIM; //Double check int division
+        B->rowPtrs[tile]++;
     }
 
     // Prefix sum
     unsigned int sum = 0;
-    for(unsigned int row = 0; row < A->numRows; ++row) {
+    for(unsigned int row = 0; row < A->numRows * tilesPerRow; ++row) {
         unsigned int val = B->rowPtrs[row];
         B->rowPtrs[row] = sum;
         sum += val;
     }
-    B->rowPtrs[A->numRows] = sum;
+    B->rowPtrs[A->numRows*tilesPerRow] = sum;
 
     // Binning
     for(unsigned int index = 0; index < A->nnz; ++index) {
         unsigned int row = A->rowIdxs[index];
-        unsigned int i   = B->rowPtrs[row]++;
-        B->colIdxs[i]    = A->colIdxs[index];
-        B->values[i]     = A->values[index];
+        unsigned int col = A->colIdxs[index];
+        unsigned int tile = row * tilesPerRow + col/BLOCKDIM;
+
+        unsigned int i = B->rowPtrs[tile]++;
+        B->colIdxs[i] = A->colIdxs[index];
+        B->values[i] = A->values[index];
     }
 
     // Restore row pointers
-    for(unsigned int row = A->numRows - 1; row > 0; --row) {
+    for(unsigned int row = A->(numRows*tilesPerRow) - 1; row > 0; --row) {
         B->rowPtrs[row] = B->rowPtrs[row - 1];
     }
     B->rowPtrs[0] = 0;
 
     // Sort nonzeros within each row
-    for(unsigned int row = 0; row < B->numRows; ++row) {
+    for(unsigned int row = 0; row < (B->numRows * tilesPerRow); ++row) {
         unsigned int start = B->rowPtrs[row];
         unsigned int end = B->rowPtrs[row + 1] - 1;
         quicksort(B->values, B->colIdxs, start, end);
+    }
+
+    //Build rowPtrsBlock.
+    
+    for(unsigned int colTile = 0; colTile<tilesPerCol; ++colTile){
+
+        for(unsigned int rowTile = 0; rowTile<tilesPerRow; ++rowTile){
+
+            for(unsigned int row = 0; row<BLOCKDIM; ++row){
+
+                rowIdx = ((colTile * tilesPerRow + rowTile)*BLOCKDIM)+row;
+
+                if(row == 0){
+                    B->rowPtrsBlock[rowIdx] = 0;
+                }else{
+                    B->rowPtrsBlock[rowIdx] = B->rowPtrsBlock[rowIdx-1] + (B->rowPtrs[rowIdx+tilesPerRow] - B->rowPtrs[rowIdx]);
+                }
+            }
+        }
     }
 }
 
