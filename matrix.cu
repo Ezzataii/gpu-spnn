@@ -5,6 +5,7 @@
 
 #include "matrix.h"
 
+// Vector Function
 Vector* createVectorFromFile(const char *fname) {
 
     // Check if file exists
@@ -70,6 +71,10 @@ void writeVectorToFile(Vector* vec, const char *fname) {
     fclose(fp);
 }
 
+
+
+
+// COO Functions
 COOMatrix* createEmptyCOO(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
     COOMatrix *coo = (COOMatrix *)malloc(sizeof(COOMatrix));
     coo->rowIdxs = (unsigned int *)calloc(1, capacity * sizeof(unsigned int));
@@ -171,6 +176,10 @@ void writeCOOtoFile(COOMatrix* A, const char *fname) {
     fclose(fp);
 }
 
+
+
+
+// CSR Functions
 CSRMatrix* createEmptyCSR(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
     CSRMatrix *csr = (CSRMatrix *)malloc(sizeof(CSRMatrix));
     csr->rowPtrs= (unsigned int *)calloc(1, (numRows+1) * sizeof(unsigned int));
@@ -291,7 +300,11 @@ void writeCSRtoFile(CSRMatrix* A, const char *fname) {
     fclose(fp);
 }
 
-CSCMatrix* createCSCfromCOO(COOMatrix* A) {
+
+
+
+// CSC Functions
+CSCMatrix* convertCSCfromCOO(COOMatrix* A) {
 
     // Allocate
     unsigned int *colPtrs= (unsigned int *) calloc(A->numCols + 1, sizeof(unsigned int));
@@ -347,3 +360,83 @@ void freeCSC(CSCMatrix* csc) {
     free(csc);
 }
 
+
+
+
+// CSRTiled Functions
+void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim) {
+
+    // Check compatibility
+    if(B->numRows != A->numRows || B->numCols != A->numCols) {
+        fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
+        exit(1);
+    }
+    if(B->capacity < A->nnz) {
+        fprintf(stderr, "%s: CSR matrix has insufficient capacity!\n", __func__);
+        exit(1);
+    }
+
+    // Set nonzeros
+    B->nnz = A->nnz;
+
+    // Histogram
+    memset(B->rowPtrs, 0, (B->numRows * (B->numCols/blockDim) + 1) * sizeof(unsigned int));
+    for(unsigned int i = 0; i < A->nnz; ++i) {
+        unsigned int row = A->rowIdxs[i];
+        B->rowPtrs[row]++;
+    }
+
+    // Prefix sum
+    unsigned int sum = 0;
+    for(unsigned int row = 0; row < A->numRows; ++row) {
+        unsigned int val = B->rowPtrs[row];
+        B->rowPtrs[row] = sum;
+        sum += val;
+    }
+    B->rowPtrs[A->numRows] = sum;
+
+    // Binning
+    for(unsigned int index = 0; index < A->nnz; ++index) {
+        unsigned int row = A->rowIdxs[index];
+        unsigned int i   = B->rowPtrs[row]++;
+        B->colIdxs[i]    = A->colIdxs[index];
+        B->values[i]     = A->values[index];
+    }
+
+    // Restore row pointers
+    for(unsigned int row = A->numRows - 1; row > 0; --row) {
+        B->rowPtrs[row] = B->rowPtrs[row - 1];
+    }
+    B->rowPtrs[0] = 0;
+
+    // Sort nonzeros within each row
+    for(unsigned int row = 0; row < B->numRows; ++row) {
+        unsigned int start = B->rowPtrs[row];
+        unsigned int end = B->rowPtrs[row + 1] - 1;
+        quicksort(B->values, B->colIdxs, start, end);
+    }
+}
+
+void freeCSRTiled(CSRTiledMatrix* csr) {
+    free(csr->rowPtrs);
+    free(csr->rowPtrsBlock);
+    free(csr->colIdxs);
+    free(csr->values);
+    free(csr);
+}
+
+
+
+
+// CSCTiled Functions
+void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim) {
+
+}
+
+void freeCSCTiled(CSCTiledMatrix* csc) {
+    free(csc->colPtrs);
+    free(csc->colPtrsBlock);
+    free(csc->colIdxs);
+    free(csc->values);
+    free(csc);
+}

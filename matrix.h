@@ -14,6 +14,9 @@ void expandVectorCapacity(Vector* vec, unsigned int capacity);
 void freeVector(Vector* vec);
 void writeVectorToFile(Vector* vec, const char *fname);
 
+
+
+
 typedef struct COOMatrix {
     unsigned int numRows;
     unsigned int numCols;
@@ -30,6 +33,9 @@ void expandCOOCapacity(COOMatrix* A, unsigned int capacity);
 void freeCOO(COOMatrix* coo);
 void writeCOOtoFile(COOMatrix* A, const char *fname);
 
+
+
+
 typedef struct CSRMatrix {
     unsigned int numRows;
     unsigned int numCols;
@@ -39,6 +45,10 @@ typedef struct CSRMatrix {
     unsigned int* colIdxs;
     float* values;
 } CSRMatrix;
+
+
+
+
 
 CSRMatrix* createEmptyCSR(unsigned int numRows, unsigned int numCols, unsigned int capacity);
 void convertCOOtoCSR(COOMatrix* A, CSRMatrix* B);
@@ -56,8 +66,40 @@ typedef struct CSCMatrix {
     float* values;
 } CSCMatrix;
 
-CSCMatrix* createCSCfromCOO(COOMatrix* A);
+CSCMatrix* convertCSCfromCOO(COOMatrix* A);
 void freeCSC(CSCMatrix* csc);
 
+
+
+
+typedef struct CSRTiledMatrix {
+    unsigned int numRows;
+    unsigned int numCols;
+    unsigned int nnz;
+    unsigned int capacity;
+    unsigned int* rowPtrsBlock;
+    unsigned int* rowPtrs;
+    unsigned int* colIdxs;
+    float* values;
+} CSRTiledMatrix;
+
+void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim);
+void freeCSRTiled(CSRTiledMatrix* csr);
+
+
+
+typedef struct CSCTiledMatrix {
+    unsigned int numRows;
+    unsigned int numCols;
+    unsigned int nnz;
+    unsigned int capacity;
+    unsigned int* colPtrsBlock;
+    unsigned int* colPtrs;
+    unsigned int* rowIdxs;
+    float* values;
+} CSCTiledMatrix;
+
+void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim);
+void freeCSCTiled(CSCTiledMatrix* csc);
 #endif
 
