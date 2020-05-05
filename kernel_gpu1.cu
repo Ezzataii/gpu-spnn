@@ -229,10 +229,10 @@ CSRTiledMatrix* createEmptyCSRTiled_d(unsigned int numRows, unsigned int numCols
     csrShadow.numCols = numCols;
     csrShadow.nnz = 0;
     csrShadow.capacity = capacity;
-    unsigned int tilesPerDim = (numCols+BLOCKDIM-1)/BLOCKDIM;
+    unsigned int tilesPerRow = (numCols+BLOCKDIM-1)/BLOCKDIM;
 
-    cudaMalloc((void**) &csrShadow.rowPtrs,      ((numRows * tilesPerDim) + 1) * sizeof(unsigned int));
-    cudaMalloc((void**) &csrShadow.rowPtrsBlock, ((numRows * tilesPerDim) + 1) * sizeof(unsigned int));
+    cudaMalloc((void**) &csrShadow.rowPtrs,      ((numRows * tilesPerRow) + 1) * sizeof(unsigned int));
+    cudaMalloc((void**) &csrShadow.rowPtrsBlock, ((numRows * tilesPerRow) + 1) * sizeof(unsigned int));
     cudaMalloc((void**) &csrShadow.colIdxs,      capacity * sizeof(unsigned int));
     cudaMalloc((void**) &csrShadow.values,       capacity * sizeof(float));
 
@@ -272,13 +272,13 @@ CSRTiledMatrix* createEmptyCSRTiled_pinned(unsigned int numRows, unsigned int nu
     csr->numCols = numCols;
     csr->nnz = 0;
     csr->capacity = capacity;
-    unsigned int tilesPerDim = (numCols+BLOCKDIM-1)/BLOCKDIM;
+    unsigned int tilesPerRow = (numCols+BLOCKDIM-1)/BLOCKDIM;
 
-    cudaMallocHost((void**) &csr->rowPtrs,      (numRows * tilesPerDim + 1) * sizeof(unsigned int));
-    cudaMallocHost((void**) &csr->rowPtrsBlock, (numRows * tilesPerDim + 1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csr->rowPtrs,      (numRows * tilesPerRow + 1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csr->rowPtrsBlock, (numRows * tilesPerRow + 1) * sizeof(unsigned int));
     cudaMallocHost((void**) &csr->colIdxs,      capacity * sizeof(unsigned int));
     cudaMallocHost((void**) &csr->values,       capacity * sizeof(float));
-    for(int i = 0; i < numRows * tilesPerDim + 1; ++i){
+    for(int i = 0; i < numRows * tilesPerRow + 1; ++i){
         csr->rowPtrsBlock[i] = 0;
         csr->rowPtrs[i]      = 0;
     }
@@ -306,15 +306,15 @@ CSCTiledMatrix* createCSCfromCSCTiled_d(CSCTiledMatrix* csc) {
     cscShadow.nnz = csc->nnz;
     cscShadow.capacity = csc->capacity;
 
-    unsigned int tilesPerDim = (csc->numRows + BLOCKDIM - 1) /BLOCKDIM;
+    unsigned int tilesPerCol = (csc->numRows + BLOCKDIM - 1) /BLOCKDIM;
 
-    cudaMalloc((void**) &cscShadow.colPtrs,      ((csc->numCols * tilesPerDim) + 1) * sizeof(unsigned int));
-    cudaMalloc((void**) &cscShadow.colPtrsBlock, ((csc->numCols * tilesPerDim) + 1) * sizeof(unsigned int));
+    cudaMalloc((void**) &cscShadow.colPtrs,      ((csc->numCols * tilesPerCol) + 1) * sizeof(unsigned int));
+    cudaMalloc((void**) &cscShadow.colPtrsBlock, ((csc->numCols * tilesPerCol) + 1) * sizeof(unsigned int));
     cudaMalloc((void**) &cscShadow.rowIdxs,      csc->capacity * sizeof(unsigned int));
     cudaMalloc((void**) &cscShadow.values,       csc->capacity * sizeof(float));
 
-    cudaMemcpy(cscShadow.colPtrs, csc->colPtrs,       ((csc->numCols * tilesPerDim) + 1) * sizeof(unsigned int), cudaMemcpyHostToDevice);
-    cudaMemcpy(cscShadow.colPtrs, csc->colPtrsBlock,  ((csc->numCols * tilesPerDim) + 1) * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(cscShadow.colPtrs, csc->colPtrs,       ((csc->numCols * tilesPerCol) + 1) * sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(cscShadow.colPtrs, csc->colPtrsBlock,  ((csc->numCols * tilesPerCol) + 1) * sizeof(unsigned int), cudaMemcpyHostToDevice);
     cudaMemcpy(cscShadow.rowIdxs, csc->rowIdxs,       csc->capacity * sizeof(unsigned int),                                cudaMemcpyHostToDevice);
     cudaMemcpy(cscShadow.values, csc->values,         csc->capacity * sizeof(float),                                       cudaMemcpyHostToDevice);
 
@@ -335,13 +335,13 @@ CSCTiledMatrix* createEmptyCSCTiled_pinned(unsigned int numRows, unsigned int nu
     csc->numCols = numCols;
     csc->nnz = 0;
     csc->capacity = capacity;
-    unsigned int tilesPerDim = (numRows+BLOCKDIM-1)/BLOCKDIM;
+    unsigned int tilesPerCol = (numRows+BLOCKDIM-1)/BLOCKDIM;
 
-    cudaMallocHost((void**) &csc->colPtrs,      (numCols * tilesPerDim + 1) * sizeof(unsigned int));
-    cudaMallocHost((void**) &csc->colPtrsBlock, (numCols * tilesPerDim + 1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csc->colPtrs,      (numCols * tilesPerCol + 1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csc->colPtrsBlock, (numCols * tilesPerCol + 1) * sizeof(unsigned int));
     cudaMallocHost((void**) &csc->rowIdxs,      capacity * sizeof(unsigned int));
     cudaMallocHost((void**) &csc->values,       capacity * sizeof(float));
-    for(int i = 0; i < numCols * tilesPerDim + 1; ++i){
+    for(int i = 0; i < numCols * tilesPerCol + 1; ++i){
         csc->colPtrsBlock[i] = 0;
         csc->colPtrs[i]      = 0;
     }
@@ -367,7 +367,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     // Convert featureVectors to CSR
     startTime(&timer);
     CSRTiledMatrix* Y0   = createEmptyCSRTiled_pinned(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz);        // Assuming 4*nnz is enough for all Y vectors
-    convertCOOfromCSRTiled(featureVectors, Y0, BLOCKDIM);
+    convertCOOtoCSRTiled(featureVectors, Y0, BLOCKDIM);
 
     CSRTiledMatrix* Y0_d = createEmptyCSRTiled_d(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz);             // Assuming 4*nnz is enough for all Y vectors
     stopTimeAndPrint(&timer, "Convert feature vectors to CSR");
@@ -378,9 +378,12 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     CSCTiledMatrix* W[numLayers];
     CSCTiledMatrix* W_d[numLayers];
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-        W[layer] = createEmptyCSCTiled_pinned(layerWeights[layer]->numRows, layerWeights[layer]->numCols, 4 * layerWeights[layer]->nnz);
-        convertCOOfromCSCTiled(layerWeights[layer], W[layer], BLOCKDIM);
-        W_d[layer] = createCSCfromCSCTiled_d(W[layer]);
+        W[layer] = createCSCTiledfromCOO(layerWeights[layer]);
+        
+
+        // W[layer] = createEmptyCSCTiled_pinned(layerWeights[layer]->numRows, layerWeights[layer]->numCols, 4 * layerWeights[layer]->nnz);
+        // convertCOOtoCSCTiled(layerWeights[layer], W[layer], BLOCKDIM);
+        // W_d[layer] = createCSCfromCSCTiled_d(W[layer]);
     }
     stopTimeAndPrint(&timer, "Convert weights to CSR");
 
@@ -425,7 +428,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
         // Convert COO to CSR
         startTime(&timer);
-        convertCOOfromCSRTiled(Yout, Yin, BLOCKDIM);
+        convertCOOtoCSRTiled(Yout, Yin, BLOCKDIM);
         stopTimeAndPrint(&timer, "    Converting COO to CSR");
 
     }

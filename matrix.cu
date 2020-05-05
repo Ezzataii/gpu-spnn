@@ -364,7 +364,7 @@ void freeCSC(CSCMatrix* csc) {
 
 
 // CSRTiled Functions
-void convertCOOfromCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim) {
+void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim) {
     // Check compatibility
     if(B->numRows != A->numRows || B->numCols != A->numCols) {
         fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
@@ -453,7 +453,7 @@ void freeCSRTiled(CSRTiledMatrix* csr) {
 
 
 // CSCTiled Functions
-void convertCOOfromCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim) {
+void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim) {
     // Check compatibility
     if(B->numRows != A->numRows || B->numCols != A->numCols) {
         fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
@@ -529,6 +529,8 @@ void convertCOOfromCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockD
         }
     }
 }
+
+void createCSCTiledfromCOO()
 
 void freeCSCTiled(CSCTiledMatrix* csc) {
     free(csc->colPtrs);
