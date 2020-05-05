@@ -9,64 +9,84 @@
 #define THRESHOLD 0.000001
 #define YMAX 32
 #define BLOCKDIM 32
+#define WARP_SIZE 32
 
 __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias) {
-    unsigned int row = blockDim.x * blockIdx.x + threadIdx.x;
+    unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
+    unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
 
-    if(row < A->numRows) {
-        unsigned int rowPtrA = A->rowPtrs[row];
-        unsigned int nnzA = A->rowPtrs[row + 1] - rowPtrA;
+    if(row < A->numRows && col < B->numCols) {
+        unsigned int nnzA = A->rowPtrs[row + 1] - A->rowPtrs[row];
+        unsigned int nnzB = B->colPtrs[col + 1] - B->colPtrs[col];
+        if(nnzA > 0 && nnzB > 0) {
 
-        if(nnzA > 0) {
+            unsigned int rowPtrA = A->rowPtrs[row];
+            unsigned int colPtrB = B->colPtrs[col];
+
             unsigned int* colIdxsA = A->colIdxs + rowPtrA; 
-            float* valueA = A->values + rowPtrA; 
+            unsigned int* rowIdxsB = B->rowIdxs + colPtrB;
 
-            for(unsigned int col = 0; col < B->numCols; ++col) {
-                unsigned int colPtrB = B->colPtrs[col];
-                unsigned int nnzB = B->colPtrs[col + 1] - colPtrB;
-                
-                if(nnzB < B->numCols) {
-                    unsigned int* rowIdxsB = B->rowIdxs + colPtrB;
-                    float* valueB = B->values + colPtrB;
-                    
-                    // Loop and find intersection
-                    float sum = 0.0f;
-                    unsigned int ia = 0; unsigned int ib = 0;
-                    while(ia < nnzA && ib < nnzB) {
-                        unsigned int colIdx = colIdxsA[ia]; 
-                        unsigned int rowIdx = rowIdxsB[ib]; 
-                        if(colIdx < rowIdx) {
-                            ia++;
-                        } else if(colIdx > rowIdx) {
-                            ib++;
-                        } else {
-                            sum += valueA[ia] * valueB[ib];
-                            ia++;
-                            ib++;
-                        }
-                    }
-            
-                    if(sum > THRESHOLD || sum < -THRESHOLD) {
-                        sum += bias;
-            
-                        if(sum > 0) {
-                            unsigned int nnzIdx = atomicAdd(&result->nnz, 1);
-            
-                            if(sum > YMAX) {
-                                sum = YMAX;
-                            }
-                            if(nnzIdx >= result->capacity) {
-                                printf("WE RAN OUT OF CAPACITY\n");
-                            }
-                            result->colIdxs[nnzIdx] = col;
-                            result->rowIdxs[nnzIdx] = row;
-                            result->values[nnzIdx]  = sum;
-                        }    
-                    } 
+            float* valueA = A->values + rowPtrA; //Ptr to first value in A 
+            float* valueB = B->values + colPtrB; //Ptr to first value in B
+
+
+            // Loop and find intersection
+            float sum = 0.0f;
+            unsigned int ia = 0;
+            unsigned int ib = 0;
+        
+            while(ia < nnzA && ib < nnzB) {
+                unsigned int colIdx = colIdxsA[ia]; 
+                unsigned int rowIdx = rowIdxsB[ib]; 
+                if(colIdx < rowIdx) {
+                    ia++;
+                } else if(colIdx > rowIdx) {
+                    ib++;
+                } else {
+                    sum += valueA[ia] * valueB[ib];
+                    ia++;
+                    ib++;
                 }
-                
             }
-        }      
+
+            if(sum > THRESHOLD || sum < -THRESHOLD) {
+                sum += bias;
+                if(sum > 0) {
+                    
+                    // Assign a leader thread
+                    unsigned int activeThreads = __activemask();
+                    unsigned int leader = __ffs(activeThreads) - 1;
+
+                    // Find how many threads need to add to the queue
+                    unsigned int numActive = __popc(activeThreads);
+
+                    // Have the leader perform the atomic operation
+                    unsigned int nnzIdx;
+                    if(threadIdx.x%WARP_SIZE == leader) {
+                       nnzIdx = atomicAdd(&result->nnz, numActive);
+                    }
+
+                    // Broadcast the result
+                    nnzIdx = __shfl_sync(activeThreads, nnzIdx, leader);
+                    // Find the position of each thread
+                    unsigned int previousThreads = (1 << (threadIdx.x%WARP_SIZE)) - 1;
+                    unsigned int activePreviousThreads = activeThreads & previousThreads;
+                    unsigned int offset = __popc(activePreviousThreads);
+
+                    // Store the result
+                    if(sum > YMAX) {
+                        sum = YMAX;
+                    }
+                    if(nnzIdx+offset >= result->capacity) {
+                        printf("WE RAN OUT OF CAPACITY\n");
+                    }
+                    result->colIdxs[nnzIdx + offset] = col;
+                    result->rowIdxs[nnzIdx + offset] = row;
+                    result->values[nnzIdx + offset]  = sum;
+                
+                }    
+            }        
+        }
     }
 }
 
@@ -163,13 +183,66 @@ CSCMatrix* createCSCfromCSC_d(CSCMatrix* csc) {
     return csc_d;
 }
 
+//PinnedMemory Functions
+COOMatrix* createEmptyCOO_pinned(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
+    COOMatrix *coo; cudaMallocHost((void**)&coo,sizeof(COOMatrix));
+
+    coo->numRows = numRows;
+    coo->numCols = numCols;
+    coo->nnz = 0;
+    coo->capacity = capacity;
+
+    cudaMallocHost((void**) &coo->colIdxs, capacity * sizeof(unsigned int));
+    cudaMallocHost((void**) &coo->values,  capacity * sizeof(float));
+    cudaMallocHost((void**) &coo->rowIdxs, capacity * sizeof(unsigned int));
+
+    for(int i = 0; i<capacity; ++i){
+        coo->rowIdxs[i] = 0;
+    }
+
+    return coo;
+}
+
+// CSR Functions
+CSRMatrix* createEmptyCSR_pinned(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
+    CSRMatrix *csr;
+    cudaMallocHost((void**) &csr, sizeof(CSRMatrix));
+    csr->numRows = numRows;
+    csr->numCols = numCols;
+    csr->nnz = 0;
+    csr->capacity = capacity;
+
+    cudaMallocHost((void**) &csr->rowPtrs,  (numRows+1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csr->colIdxs,  capacity    * sizeof(unsigned int));
+    cudaMallocHost((void**) &csr->values,   capacity    * sizeof(float));
+    for(int i = 0; i<numRows+1; ++i){
+        csr->rowPtrs[i] = 0;
+    }
+    return csr;
+}
+
+void freeCOO_pinned(COOMatrix* coo) {
+    cudaFreeHost(coo->rowIdxs);
+    cudaFreeHost(coo->colIdxs);
+    cudaFreeHost(coo->values);
+    cudaFreeHost(coo);
+}
+
+void freeCSR_pinned(CSRMatrix* csr) {
+    cudaFreeHost(csr->rowPtrs);
+    cudaFreeHost(csr->colIdxs);
+    cudaFreeHost(csr->values);
+    cudaFreeHost(csr);
+}
+
+
 void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeights, float bias, unsigned int numLayers) {
 
     Timer timer;
 
     // Convert featureVectors to CSR
     startTime(&timer);
-    CSRMatrix* Y0 = createEmptyCSR(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
+    CSRMatrix* Y0 = createEmptyCSR_pinned(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
     convertCOOtoCSR(featureVectors, Y0);
     CSRMatrix* Y0_d = createEmptyCSR_d(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
     stopTimeAndPrint(&timer, "Convert feature vectors to CSR");
@@ -186,7 +259,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
     // Temporary buffer
     startTime(&timer);
-    COOMatrix *tmp   = createEmptyCOO(Y0->numRows, Y0->numCols, Y0->capacity);
+    COOMatrix *tmp   = createEmptyCOO_pinned(Y0->numRows, Y0->numCols, Y0->capacity);
     COOMatrix *tmp_d = createEmptyCOO_d(Y0->numRows, Y0->numCols, Y0->capacity);
     stopTimeAndPrint(&timer, "Allocate temporary buffer");
 
@@ -207,8 +280,8 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
         // SpMSpM
         startTime(&timer);
-        unsigned int gridSize = (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM;
-        unsigned int blockSize = BLOCKDIM; 
+        dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
+        dim3 blockSize(BLOCKDIM, BLOCKDIM); 
 
         spmspm <<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias);
         
@@ -235,11 +308,11 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
     // Free buffers
     startTime(&timer);
-    freeCSR(Y0);
+    freeCSR_pinned(Y0);
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
         freeCSC(W[layer]);
     }
-    freeCOO(tmp);
+    freeCOO_pinned(tmp);
     stopTimeAndPrint(&timer, "Deallocate memory");
 
 }

@@ -11,61 +11,62 @@
 #define BLOCKDIM 32
 
 __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias) {
-    unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
-    unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
-    //Layer 0 producing correct output but subsequent calls of the kernel result always in nnz 0
-    if(row < A->numRows && col < B->numCols) {
-        unsigned int nnzA = A->rowPtrs[row + 1] - A->rowPtrs[row];
-        unsigned int nnzB = B->colPtrs[col + 1] - B->colPtrs[col];
-        if(nnzA > 0 && nnzB > 0) {
+    unsigned int row = blockDim.x * blockIdx.x + threadIdx.x;
 
-            unsigned int rowPtrA = A->rowPtrs[row];
-            unsigned int colPtrB = B->colPtrs[col];
+    if(row < A->numRows) {
+        unsigned int rowPtrA = A->rowPtrs[row];
+        unsigned int nnzA = A->rowPtrs[row + 1] - rowPtrA;
 
+        if(nnzA > 0) {
             unsigned int* colIdxsA = A->colIdxs + rowPtrA; 
-            unsigned int* rowIdxsB = B->rowIdxs + colPtrB;
+            float* valueA = A->values + rowPtrA; 
 
-            float* valueA = A->values + rowPtrA; //Ptr to first value in A 
-            float* valueB = B->values + colPtrB; //Ptr to first value in B
-
-
-            // Loop and find intersection
-            float sum = 0.0f;
-            unsigned int ia = 0;
-            unsigned int ib = 0;
-        
-            while(ia < nnzA && ib < nnzB) {
-                unsigned int colIdx = colIdxsA[ia]; 
-                unsigned int rowIdx = rowIdxsB[ib]; 
-                if(colIdx < rowIdx) {
-                    ia++;
-                } else if(colIdx > rowIdx) {
-                    ib++;
-                } else {
-                    sum += valueA[ia] * valueB[ib];
-                    ia++;
-                    ib++;
+            for(unsigned int col = 0; col < B->numCols; ++col) {
+                unsigned int colPtrB = B->colPtrs[col];
+                unsigned int nnzB = B->colPtrs[col + 1] - colPtrB;
+                
+                if(nnzB < B->numCols) {
+                    unsigned int* rowIdxsB = B->rowIdxs + colPtrB;
+                    float* valueB = B->values + colPtrB;
+                    
+                    // Loop and find intersection
+                    float sum = 0.0f;
+                    unsigned int ia = 0; unsigned int ib = 0;
+                    while(ia < nnzA && ib < nnzB) {
+                        unsigned int colIdx = colIdxsA[ia]; 
+                        unsigned int rowIdx = rowIdxsB[ib]; 
+                        if(colIdx < rowIdx) {
+                            ia++;
+                        } else if(colIdx > rowIdx) {
+                            ib++;
+                        } else {
+                            sum += valueA[ia] * valueB[ib];
+                            ia++;
+                            ib++;
+                        }
+                    }
+            
+                    if(sum > THRESHOLD || sum < -THRESHOLD) {
+                        sum += bias;
+            
+                        if(sum > 0) {
+                            unsigned int nnzIdx = atomicAdd(&result->nnz, 1);
+            
+                            if(sum > YMAX) {
+                                sum = YMAX;
+                            }
+                            if(nnzIdx >= result->capacity) {
+                                printf("WE RAN OUT OF CAPACITY\n");
+                            }
+                            result->colIdxs[nnzIdx] = col;
+                            result->rowIdxs[nnzIdx] = row;
+                            result->values[nnzIdx]  = sum;
+                        }    
+                    } 
                 }
+                
             }
-
-            if(sum > THRESHOLD || sum < -THRESHOLD) {
-                sum += bias;
-
-                if(sum > 0) {
-                    unsigned int nnzIdx = atomicAdd(&result->nnz, 1);
-
-                    if(sum > YMAX) {
-                        sum = YMAX;
-                    }
-                    if(nnzIdx >= result->capacity) {
-                        printf("WE RAN OUT OF CAPACITY\n");
-                    }
-                    result->colIdxs[nnzIdx] = col;
-                    result->rowIdxs[nnzIdx] = row;
-                    result->values[nnzIdx]  = sum;
-                }    
-            }        
-        }
+        }      
     }
 }
 
@@ -206,8 +207,8 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
         // SpMSpM
         startTime(&timer);
-        dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
-        dim3 blockSize(BLOCKDIM, BLOCKDIM); 
+        unsigned int gridSize = (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM;
+        unsigned int blockSize = BLOCKDIM; 
 
         spmspm <<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias);
         
