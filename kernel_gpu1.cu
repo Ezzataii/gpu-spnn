@@ -212,7 +212,7 @@ void freeCOO_pinned(COOMatrix* coo) {
 
 
 // CSR Functions
-CSRTiledMatrix* createEmptyCSR_d(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
+CSRTiledMatrix* createEmptyCSRTiled_d(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
     CSRTiledMatrix csrShadow;
 
     csrShadow.numRows = numRows;
@@ -235,7 +235,7 @@ CSRTiledMatrix* createEmptyCSR_d(unsigned int numRows, unsigned int numCols, uns
     return csr_d;
 }
 
-void copyCSRtoGPU(CSRTiledMatrix* csr, CSRTiledMatrix* csr_d) {
+void copyCSRTiledtoGPU(CSRTiledMatrix* csr, CSRTiledMatrix* csr_d) {
     unsigned int tilesPerDim = (csr->numCols+BLOCKDIM-1)/BLOCKDIM;
 
     CSRTiledMatrix csrShadow;
@@ -254,7 +254,7 @@ void copyCSRtoGPU(CSRTiledMatrix* csr, CSRTiledMatrix* csr_d) {
     cudaDeviceSynchronize();
 }
 
-CSRTiledMatrix* createEmptyCSR_pinned(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
+CSRTiledMatrix* createEmptyCSRTiled_pinned(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
     CSRTiledMatrix *csr; 
     cudaMallocHost((void**) &csr, sizeof(CSRTiledMatrix))
 
@@ -276,7 +276,7 @@ CSRTiledMatrix* createEmptyCSR_pinned(unsigned int numRows, unsigned int numCols
     return csr;
 }
 
-void freeCSR_pinned(CSRMatrix* csr) {
+void freeCSRTiled_pinned(CSRMatrix* csr) {
     cudaFreeHost(csr->rowPtrs);
     cudaFreeHost(csr->rowPtrsBlock);
     cudaFreeHost(csr->colIdxs);
@@ -288,7 +288,7 @@ void freeCSR_pinned(CSRMatrix* csr) {
 
 
 // CSC Functions
-CSCMatrix* createCSCfromCSC_d(CSCMatrix* csc) {
+CSCMatrix* createCSCfromCSCTiled_d(CSCMatrix* csc) {
     CSCMatrix cscShadow;
 
     cscShadow.numRows = csc->numRows;
@@ -323,22 +323,22 @@ CSCMatrix* createCSCfromCSC_d(CSCMatrix* csc) {
 void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeights, float bias, unsigned int numLayers) {
 
     Timer timer;
-
+    
     // Convert featureVectors to CSR
     startTime(&timer);
-    CSRMatrix* Y0 = createEmptyCSR_pinned(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
-    convertCOOtoCSR(featureVectors, Y0);
-    CSRMatrix* Y0_d = createEmptyCSR_d(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz);    // Assuming 4*nnz is enough for all Y vectors
+    CSRTiledMatrix* Y0 = createEmptyCSRTiled_pinned(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
+    convertCOOtoCSRTiled(featureVectors, Y0);
+    CSRTiledMatrix* Y0_d = createEmptyCSRTiled_d(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz);           // Assuming 4*nnz is enough for all Y vectors
     stopTimeAndPrint(&timer, "Convert feature vectors to CSR");
 
 
     // Convert layer weights to CSC
     startTime(&timer);
-    CSCMatrix* W[numLayers];
-    CSCMatrix* W_d[numLayers];
+    CSCTiledMatrix* W[numLayers];
+    CSCTiledMatrix* W_d[numLayers];
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-        W[layer]   = convertCSCfromCOO(layerWeights[layer]);
-        W_d[layer] = createCSCfromCSC_d(W[layer]);
+        W[layer]   = convertCSCfromCOOTiled(layerWeights[layer]);
+        W_d[layer] = createCSCfromCSCTiled_d(W[layer]);
     }
     stopTimeAndPrint(&timer, "Convert weights to CSR");
 
@@ -351,27 +351,27 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
 
     // Loop over layers
-    CSRMatrix *Yin    = Y0;
-    COOMatrix *Yout   = tmp;
-    CSRMatrix *Yin_d  = Y0_d;
-    COOMatrix *Yout_d = tmp_d;
+    CSRTiledMatrix *Yin    = Y0;
+    COOMatrix      *Yout   = tmp;
+    CSRTiledMatrix *Yin_d  = Y0_d;
+    COOMatrix      *Yout_d = tmp_d;
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
 
         printf("Computing layer %u (SpMSpM)\n", layer);
 
         // Copy to GPU
         startTime(&timer);
-        copyCSRtoGPU(Yin, Yin_d);
+        copyCSRTiledtoGPU(Yin, Yin_d);
         cudaMemset(&Yout_d->nnz, 0, sizeof(unsigned int));
         stopTimeAndPrint(&timer, "    Copy CSR to GPU and clear COO");
 
         // SpMSpM
-        startTime(&timer);
-        // TODO: spmspm <<< ..., ... >>> (Yout_d, Yin_d, W_d[layer], bias);
-
+        startTime(&timer);    
         dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
         dim3 blockSize(BLOCKDIM, BLOCKDIM); 
-        spmspm <<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias, W[layer]->numRows , W[layer]->numCols , Yin->numRows);
+
+        spmspm<<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias, W[layer]->numRows, W[layer]->numCols, Yin->numRows);
+
         cudaDeviceSynchronize();
         stopTimeAndPrint(&timer, "    SpMSpM");
 
@@ -383,7 +383,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
         // Convert COO to CSR
         startTime(&timer);
-        convertCOOtoCSR(Yout, Yin);
+        convertCOOtoCSRTiled(Yout, Yin);
         stopTimeAndPrint(&timer, "    Converting COO to CSR");
 
     }
@@ -395,11 +395,10 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
     // Free buffers
     startTime(&timer);
-    freeCSR_pinned(Y0);
+    freeCSRTiled_pinned(Y0);
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
         freeCSC(W[layer]);
     }
-    freeCOO_pinned(tmp);
+    freeCOOTiled_pinned(tmp);
     stopTimeAndPrint(&timer, "Deallocate memory");
-
 }
