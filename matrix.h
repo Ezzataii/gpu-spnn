@@ -83,7 +83,7 @@ typedef struct CSRTiledMatrix {
     float* values;
 } CSRTiledMatrix;
 
-void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim);
+void convertCOOfromCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim);
 void freeCSRTiled(CSRTiledMatrix* csr);
 
 
@@ -99,7 +99,7 @@ typedef struct CSCTiledMatrix {
     float* values;
 } CSCTiledMatrix;
 
-void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim);
+void convertCOOfromCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim);
 void freeCSCTiled(CSCTiledMatrix* csc);
 #endif
 

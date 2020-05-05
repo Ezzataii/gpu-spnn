@@ -33,15 +33,15 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
     for(unsigned int tile = 0; tile < tilesPerDim; ++tile) {
         // 1 thread loads a row and a col.
         if(threadIdx.x == threadIdx.y){
-            nnz_row = 0
-            nnz_col = 0
+            unsigned int nnz_row = 0;
+            unsigned int nnz_col = 0;
 
             if(row < totalRows){
                 As_rowPtrs[threadIdx.y] = A->rowPtrsBlock[row*tilesPerDim + tile];
                 for(unsigned int i = A->rowPtrs[row*tilesPerDim + tile]; i < A->rowPtrs[row*tilesPerDim + tile + 1]; ++i){
                     As_colIdxs[nnz_row] = A->colIdxs[i];
                     As_values[nnz_row]  = A->values[i];
-                    nnz_row += 1
+                    nnz_row += 1;
                 }
             }
             
@@ -50,7 +50,7 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
                 for(unsigned int i = B->colPtrs[col*tilesPerDim + tile]; i < B->colPtrs[col*tilesPerDim + tile + 1]; ++i){
                     Bs_rowIdxs[nnz_col] = B->rowIdxs[i];
                     Bs_values[nnz_col]  = B->values[i];
-                    nnz_col += 1
+                    nnz_col += 1;
                 }
             }
             
@@ -58,13 +58,23 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
             if(blockDim.y * (blockIdx.y + 1) > totalRows) {
                 As_rowPtrs[totalRows % BLOCKDIM] = A->rowPtrsBlock[(totalRows - 1)*tilesPerDim + tile] + (A->rowPtrs[(totalRows - 1)*tilesPerDim + tile + 1] - A->rowPtrs[(totalRows - 1)*tilesPerDim + tile]);
             } else {
-                As_rowPtrs[blockDim] = A->rowPtrsBlock[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile] + (A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile + 1] - A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile]);
+                As_rowPtrs[BLOCKDIM] = 
+                A->rowPtrsBlock[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile] + 
+                (
+                    A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile + 1] -
+                    A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile]
+                );
             }
             
             if(blockDim.x * (blockIdx.x + 1) > totalCols) {
                 Bs_colPtrs[totalCols % BLOCKDIM] = B->colPtrsBlock[(totalCols - 1)*tilesPerDim + tile] + (B->colPtrs[(totalCols - 1)*tilesPerDim + tile + 1] - B->colPtrs[(totalCols - 1)*tilesPerDim + tile]);
             } else {
-                Bs_colPtrs[blockDim] = B->colPtrsBlock[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile] + (Bs_colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile + 1] - Bs_colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile]);
+                Bs_colPtrs[BLOCKDIM] = 
+                B->colPtrsBlock[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile] + 
+                (
+                    B->colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile + 1] - 
+                    B->colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile]
+                );
             }      
         }
         __syncthreads();
@@ -74,8 +84,8 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
             unsigned int nnzA = As_rowPtrs[threadIdx.y + 1] - A->rowPtrs[threadIdx.y];
             unsigned int nnzB = Bs_colPtrs[threadIdx.x + 1] - B->colPtrs[threadIdx.x];
             if(nnzA > 0 && nnzB > 0) {
-                unsigned int rowPtrA = As_rowPtrs->rowPtrs[threadIdx.y];
-                unsigned int colPtrB = Bs_colPtrs->colPtrs[threadIdx.x];
+                unsigned int rowPtrA = As_rowPtrs[threadIdx.y];
+                unsigned int colPtrB = Bs_colPtrs[threadIdx.x];
     
                 unsigned int* colIdxsA = As_colIdxs + rowPtrA; 
                 unsigned int* rowIdxsB = Bs_rowIdxs + colPtrB;
@@ -125,7 +135,7 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
 
 
 
-void findNonzeroRows(Vector* v, CSRMatrix* A) {
+void findNonzeroRows(Vector* v, CSRTiledMatrix* A) {
     unsigned int nnz = 0;
     for(unsigned int r = 0; r < A->numRows; ++r) {
         unsigned int rowPtrA = A->rowPtrs[r];
@@ -256,7 +266,7 @@ void copyCSRTiledtoGPU(CSRTiledMatrix* csr, CSRTiledMatrix* csr_d) {
 
 CSRTiledMatrix* createEmptyCSRTiled_pinned(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
     CSRTiledMatrix *csr; 
-    cudaMallocHost((void**) &csr, sizeof(CSRTiledMatrix))
+    cudaMallocHost((void**) &csr, sizeof(CSRTiledMatrix));
 
     csr->numRows = numRows;
     csr->numCols = numCols;
@@ -276,7 +286,7 @@ CSRTiledMatrix* createEmptyCSRTiled_pinned(unsigned int numRows, unsigned int nu
     return csr;
 }
 
-void freeCSRTiled_pinned(CSRMatrix* csr) {
+void freeCSRTiled_pinned(CSRTiledMatrix* csr) {
     cudaFreeHost(csr->rowPtrs);
     cudaFreeHost(csr->rowPtrsBlock);
     cudaFreeHost(csr->colIdxs);
@@ -288,8 +298,8 @@ void freeCSRTiled_pinned(CSRMatrix* csr) {
 
 
 // CSC Functions
-CSCMatrix* createCSCfromCSCTiled_d(CSCMatrix* csc) {
-    CSCMatrix cscShadow;
+CSCTiledMatrix* createCSCfromCSCTiled_d(CSCTiledMatrix* csc) {
+    CSCTiledMatrix cscShadow;
 
     cscShadow.numRows = csc->numRows;
     cscShadow.numCols = csc->numCols;
@@ -308,13 +318,43 @@ CSCMatrix* createCSCfromCSCTiled_d(CSCMatrix* csc) {
     cudaMemcpy(cscShadow.rowIdxs, csc->rowIdxs,       csc->capacity * sizeof(unsigned int),                                cudaMemcpyHostToDevice);
     cudaMemcpy(cscShadow.values, csc->values,         csc->capacity * sizeof(float),                                       cudaMemcpyHostToDevice);
 
-    CSCMatrix* csc_d;
-    cudaMalloc((void**) &csc_d, sizeof(CSCMatrix));
-    cudaMemcpy(csc_d, &cscShadow, sizeof(CSCMatrix), cudaMemcpyHostToDevice);
+    CSCTiledMatrix* csc_d;
+    cudaMalloc((void**) &csc_d, sizeof(CSCTiledMatrix));
+    cudaMemcpy(csc_d, &cscShadow, sizeof(CSCTiledMatrix), cudaMemcpyHostToDevice);
 
     cudaDeviceSynchronize();
 
     return csc_d;
+}
+
+CSCTiledMatrix* createEmptyCSCTiled_pinned(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
+    CSCTiledMatrix *csc; 
+    cudaMallocHost((void**) &csc, sizeof(CSCTiledMatrix));
+
+    csc->numRows = numRows;
+    csc->numCols = numCols;
+    csc->nnz = 0;
+    csc->capacity = capacity;
+    unsigned int tilesPerDim = (numRows+BLOCKDIM-1)/BLOCKDIM;
+
+    cudaMallocHost((void**) &csc->colPtrs,      (numCols * tilesPerDim + 1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csc->colPtrsBlock, (numCols * tilesPerDim + 1) * sizeof(unsigned int));
+    cudaMallocHost((void**) &csc->rowIdxs,      capacity * sizeof(unsigned int));
+    cudaMallocHost((void**) &csc->values,       capacity * sizeof(float));
+    for(int i = 0; i < numCols * tilesPerDim + 1; ++i){
+        csc->colPtrsBlock[i] = 0;
+        csc->colPtrs[i]      = 0;
+    }
+    
+    return csc;
+}
+
+void freeCSCTiled_pinned(CSCTiledMatrix* csc) {
+    cudaFreeHost(csc->colPtrs);
+    cudaFreeHost(csc->colPtrsBlock);
+    cudaFreeHost(csc->rowIdxs);
+    cudaFreeHost(csc->values);
+    cudaFreeHost(csc);
 }
 
 
@@ -326,9 +366,10 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     
     // Convert featureVectors to CSR
     startTime(&timer);
-    CSRTiledMatrix* Y0 = createEmptyCSRTiled_pinned(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
-    convertCOOtoCSRTiled(featureVectors, Y0);
-    CSRTiledMatrix* Y0_d = createEmptyCSRTiled_d(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz);           // Assuming 4*nnz is enough for all Y vectors
+    CSRTiledMatrix* Y0   = createEmptyCSRTiled_pinned(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz);        // Assuming 4*nnz is enough for all Y vectors
+    convertCOOfromCSRTiled(featureVectors, Y0, BLOCKDIM);
+
+    CSRTiledMatrix* Y0_d = createEmptyCSRTiled_d(featureVectors->numRows, featureVectors->numCols, 4 * featureVectors->nnz);             // Assuming 4*nnz is enough for all Y vectors
     stopTimeAndPrint(&timer, "Convert feature vectors to CSR");
 
 
@@ -337,7 +378,8 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     CSCTiledMatrix* W[numLayers];
     CSCTiledMatrix* W_d[numLayers];
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-        W[layer]   = convertCSCfromCOOTiled(layerWeights[layer]);
+        W[layer] = createEmptyCSCTiled_pinned(layerWeights[layer]->numRows, layerWeights[layer]->numCols, 4 * layerWeights[layer]->nnz);
+        convertCOOfromCSCTiled(layerWeights[layer], W[layer], BLOCKDIM);
         W_d[layer] = createCSCfromCSCTiled_d(W[layer]);
     }
     stopTimeAndPrint(&timer, "Convert weights to CSR");
@@ -383,7 +425,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
         // Convert COO to CSR
         startTime(&timer);
-        convertCOOtoCSRTiled(Yout, Yin);
+        convertCOOfromCSRTiled(Yout, Yin, BLOCKDIM);
         stopTimeAndPrint(&timer, "    Converting COO to CSR");
 
     }
@@ -397,8 +439,8 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     startTime(&timer);
     freeCSRTiled_pinned(Y0);
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-        freeCSC(W[layer]);
+        freeCSCTiled(W[layer]);
     }
-    freeCOOTiled_pinned(tmp);
+    freeCOO_pinned(tmp);
     stopTimeAndPrint(&timer, "Deallocate memory");
 }

@@ -364,7 +364,7 @@ void freeCSC(CSCMatrix* csc) {
 
 
 // CSRTiled Functions
-void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim) {
+void convertCOOfromCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim) {
     // Check compatibility
     if(B->numRows != A->numRows || B->numCols != A->numCols) {
         fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
@@ -375,8 +375,8 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
         exit(1);
     }
 
-    unsigned int tilesPerRow = (B->numCols + BLOCKDIM - 1)/BLOCKDIM; 
-    unsigned int tilesPerCol = (B->numRows + BLOCKDIM - 1)/BLOCKDIM;
+    unsigned int tilesPerRow = (B->numCols + blockDim - 1)/blockDim; 
+    unsigned int tilesPerCol = (B->numRows + blockDim - 1)/blockDim;
 
     
     // Set nonzeros
@@ -387,7 +387,7 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
     for(unsigned int i = 0; i < A->nnz; ++i) {
         unsigned int row  = A->rowIdxs[i];
         unsigned int col  = A->colIdxs[i];
-        unsigned int tile = row * tilesPerRow +  col/BLOCKDIM; //Double check int division
+        unsigned int tile = row * tilesPerRow +  col/blockDim; //Double check int division
         B->rowPtrs[tile]++;
     }
 
@@ -404,7 +404,7 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
     for(unsigned int index = 0; index < A->nnz; ++index) {
         unsigned int row  = A->rowIdxs[index];
         unsigned int col  = A->colIdxs[index];
-        unsigned int tile = row * tilesPerRow + col/BLOCKDIM;
+        unsigned int tile = row * tilesPerRow + col/blockDim;
 
         unsigned int i = B->rowPtrs[tile]++;
         B->colIdxs[i]  = A->colIdxs[index];
@@ -427,9 +427,9 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
     //Build rowPtrsBlock
     for(unsigned int colTile = 0; colTile < tilesPerCol; ++colTile){
         for(unsigned int rowTile = 0; rowTile < tilesPerRow; ++rowTile){
-            for(unsigned int row = 0; row < BLOCKDIM; ++row){
+            for(unsigned int row = 0; row < blockDim; ++row){
 
-                unsigned int rowIdx = ((colTile * tilesPerRow + rowTile) * BLOCKDIM) + row;
+                unsigned int rowIdx = ((colTile * tilesPerRow + rowTile) * blockDim) + row;
 
                 if(row == 0) {
                     B->rowPtrsBlock[rowIdx] = 0;
@@ -453,7 +453,7 @@ void freeCSRTiled(CSRTiledMatrix* csr) {
 
 
 // CSCTiled Functions
-void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim) {
+void convertCOOfromCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim) {
     // Check compatibility
     if(B->numRows != A->numRows || B->numCols != A->numCols) {
         fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
@@ -464,8 +464,8 @@ void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim
         exit(1);
     }
 
-    unsigned int tilesPerRow = (B->numCols + BLOCKDIM - 1)/BLOCKDIM; 
-    unsigned int tilesPerCol = (B->numRows + BLOCKDIM - 1)/BLOCKDIM;
+    unsigned int tilesPerRow = (B->numCols + blockDim - 1)/blockDim; 
+    unsigned int tilesPerCol = (B->numRows + blockDim - 1)/blockDim;
     
 
     // Set nonzeros
@@ -476,15 +476,15 @@ void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim
     for(unsigned int i = 0; i < A->nnz; ++i) {
         unsigned int row  = A->rowIdxs[i];
         unsigned int col  = A->colIdxs[i];
-        unsigned int tile = col * tilesPerCol +  row/BLOCKDIM; //Double check int division
+        unsigned int tile = col * tilesPerCol +  row/blockDim; //Double check int division
         B->colPtrs[tile]++;
     }
 
     // Prefix sum
     unsigned int sum = 0;
     for(unsigned int col = 0; col < A->numCols * tilesPerCol; ++col) {
-        unsigned int val = B->colPtrs[row];
-        B->colPtrs[row]  = sum;
+        unsigned int val = B->colPtrs[col];
+        B->colPtrs[col]  = sum;
         sum += val;
     }
     B->colPtrs[A->numCols * tilesPerCol] = sum;
@@ -493,7 +493,7 @@ void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim
     for(unsigned int index = 0; index < A->nnz; ++index) {
         unsigned int row  = A->rowIdxs[index];
         unsigned int col  = A->colIdxs[index];
-        unsigned int tile = col * tilesPerCol + row/BLOCKDIM;
+        unsigned int tile = col * tilesPerCol + row/blockDim;
 
         unsigned int i = B->colPtrs[tile]++;
         B->rowIdxs[i]  = A->rowIdxs[index];
@@ -516,9 +516,9 @@ void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim
     //Build colPtrsBlock
     for(unsigned int rowTile = 0; rowTile < tilesPerRow; ++rowTile){
         for(unsigned int colTile = 0; colTile < tilesPerCol; ++colTile){
-            for(unsigned int col = 0; col < BLOCKDIM; ++col){
+            for(unsigned int col = 0; col < blockDim; ++col){
 
-                unsigned int colIdx = ((rowTile * tilesPerCol + colTile) * BLOCKDIM) + col;
+                unsigned int colIdx = ((rowTile * tilesPerCol + colTile) * blockDim) + col;
 
                 if(col == 0) {
                     B->colPtrsBlock[colIdx] = 0;
@@ -533,7 +533,7 @@ void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim
 void freeCSCTiled(CSCTiledMatrix* csc) {
     free(csc->colPtrs);
     free(csc->colPtrsBlock);
-    free(csc->colIdxs);
+    free(csc->rowIdxs);
     free(csc->values);
     free(csc);
 }
