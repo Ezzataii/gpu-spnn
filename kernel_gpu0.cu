@@ -178,21 +178,21 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     CSCMatrix* W[numLayers];
     CSCMatrix* W_d[numLayers];
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-        W[layer] = convertCSCfromCOO(layerWeights[layer]);
+        W[layer]   = convertCSCfromCOO(layerWeights[layer]);
         W_d[layer] = createCSCfromCSC_d(W[layer]);
     }
     stopTimeAndPrint(&timer, "Convert weights to CSR");
 
     // Temporary buffer
     startTime(&timer);
-    COOMatrix *tmp = createEmptyCOO(Y0->numRows, Y0->numCols, Y0->capacity);
+    COOMatrix *tmp   = createEmptyCOO(Y0->numRows, Y0->numCols, Y0->capacity);
     COOMatrix *tmp_d = createEmptyCOO_d(Y0->numRows, Y0->numCols, Y0->capacity);
     stopTimeAndPrint(&timer, "Allocate temporary buffer");
 
     // Loop over layers
-    CSRMatrix *Yin = Y0;
-    COOMatrix *Yout = tmp;
-    CSRMatrix *Yin_d = Y0_d;
+    CSRMatrix *Yin    = Y0;
+    COOMatrix *Yout   = tmp;
+    CSRMatrix *Yin_d  = Y0_d;
     COOMatrix *Yout_d = tmp_d;
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
 
@@ -206,11 +206,11 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
 
         // SpMSpM
         startTime(&timer);
-        // TODO: spmspm <<< ..., ... >>> (Yout_d, Yin_d, W_d[layer], bias);
-
         dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
         dim3 blockSize(BLOCKDIM, BLOCKDIM); 
+
         spmspm <<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias);
+        
         cudaDeviceSynchronize();
         stopTimeAndPrint(&timer, "    SpMSpM");
 
