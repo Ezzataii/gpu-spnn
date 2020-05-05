@@ -14,7 +14,7 @@
 __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias) {
     unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
     unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
-
+    //Layer 0 producing correct output but subsequent calls of the kernel result always in nnz 0
     if(row < A->numRows && col < B->numCols) {
         unsigned int nnzA = A->rowPtrs[row + 1] - A->rowPtrs[row];
         unsigned int nnzB = B->colPtrs[col + 1] - B->colPtrs[col];
@@ -77,7 +77,7 @@ __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias
                     if(sum > YMAX) {
                         sum = YMAX;
                     }
-                    if(nnzIdx+offset >= result->capacity) {
+                    if(nnzIdx >= result->capacity) {
                         printf("WE RAN OUT OF CAPACITY\n");
                     }
                     result->colIdxs[nnzIdx + offset] = col;
