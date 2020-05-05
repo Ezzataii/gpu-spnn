@@ -530,7 +530,7 @@ void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim
     }
 }
 
-void createCSCTiledfromCOO()
+void createCSCTiledfromCOO();
 
 void freeCSCTiled(CSCTiledMatrix* csc) {
     free(csc->colPtrs);
