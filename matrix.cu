@@ -365,7 +365,6 @@ void freeCSC(CSCMatrix* csc) {
 
 // CSRTiled Functions
 void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim) {
-
     // Check compatibility
     if(B->numRows != A->numRows || B->numCols != A->numCols) {
         fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
@@ -376,17 +375,18 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
         exit(1);
     }
 
-    unsigned int tilesPerRow = (B->numCols+BLOCKDIM-1)/BLOCKDIM; 
-    unsigned int tilesPerCol = (B->numRows+BLOCKDIM-1)/BLOCKDIM;
+    unsigned int tilesPerRow = (B->numCols + BLOCKDIM - 1)/BLOCKDIM; 
+    unsigned int tilesPerCol = (B->numRows + BLOCKDIM - 1)/BLOCKDIM;
 
+    
     // Set nonzeros
     B->nnz = A->nnz;
 
     // Histogram
-    memset(B->rowPtrs, 0, (B->numRows * tilesPerRow  + 1)*sizeof(unsigned int));
+    memset(B->rowPtrs, 0, (B->numRows * tilesPerRow  + 1) * sizeof(unsigned int));
     for(unsigned int i = 0; i < A->nnz; ++i) {
-        unsigned int row = A->rowIdxs[i];
-        unsigned int col = A->colIdxs[i];
+        unsigned int row  = A->rowIdxs[i];
+        unsigned int col  = A->colIdxs[i];
         unsigned int tile = row * tilesPerRow +  col/BLOCKDIM; //Double check int division
         B->rowPtrs[tile]++;
     }
@@ -395,24 +395,24 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
     unsigned int sum = 0;
     for(unsigned int row = 0; row < A->numRows * tilesPerRow; ++row) {
         unsigned int val = B->rowPtrs[row];
-        B->rowPtrs[row] = sum;
+        B->rowPtrs[row]  = sum;
         sum += val;
     }
-    B->rowPtrs[A->numRows*tilesPerRow] = sum;
+    B->rowPtrs[A->numRows * tilesPerRow] = sum;
 
     // Binning
     for(unsigned int index = 0; index < A->nnz; ++index) {
-        unsigned int row = A->rowIdxs[index];
-        unsigned int col = A->colIdxs[index];
+        unsigned int row  = A->rowIdxs[index];
+        unsigned int col  = A->colIdxs[index];
         unsigned int tile = row * tilesPerRow + col/BLOCKDIM;
 
         unsigned int i = B->rowPtrs[tile]++;
-        B->colIdxs[i] = A->colIdxs[index];
-        B->values[i] = A->values[index];
+        B->colIdxs[i]  = A->colIdxs[index];
+        B->values[i]   = A->values[index];
     }
 
     // Restore row pointers
-    for(unsigned int row = A->(numRows*tilesPerRow) - 1; row > 0; --row) {
+    for(unsigned int row = (A->numRows * tilesPerRow) - 1; row > 0; --row) {
         B->rowPtrs[row] = B->rowPtrs[row - 1];
     }
     B->rowPtrs[0] = 0;
@@ -424,20 +424,17 @@ void convertCOOtoCSRTiled(COOMatrix* A, CSRTiledMatrix* B, unsigned int blockDim
         quicksort(B->values, B->colIdxs, start, end);
     }
 
-    //Build rowPtrsBlock.
-    
-    for(unsigned int colTile = 0; colTile<tilesPerCol; ++colTile){
+    //Build rowPtrsBlock
+    for(unsigned int colTile = 0; colTile < tilesPerCol; ++colTile){
+        for(unsigned int rowTile = 0; rowTile < tilesPerRow; ++rowTile){
+            for(unsigned int row = 0; row < BLOCKDIM; ++row){
 
-        for(unsigned int rowTile = 0; rowTile<tilesPerRow; ++rowTile){
+                unsigned int rowIdx = ((colTile * tilesPerRow + rowTile) * BLOCKDIM) + row;
 
-            for(unsigned int row = 0; row<BLOCKDIM; ++row){
-
-                rowIdx = ((colTile * tilesPerRow + rowTile)*BLOCKDIM)+row;
-
-                if(row == 0){
+                if(row == 0) {
                     B->rowPtrsBlock[rowIdx] = 0;
-                }else{
-                    B->rowPtrsBlock[rowIdx] = B->rowPtrsBlock[rowIdx-1] + (B->rowPtrs[rowIdx+tilesPerRow] - B->rowPtrs[rowIdx]);
+                } else {
+                    B->rowPtrsBlock[rowIdx] = B->rowPtrsBlock[rowIdx - 1] + (B->rowPtrs[rowIdx+tilesPerRow] - B->rowPtrs[rowIdx]);
                 }
             }
         }
@@ -457,7 +454,80 @@ void freeCSRTiled(CSRTiledMatrix* csr) {
 
 // CSCTiled Functions
 void convertCOOtoCSCTiled(COOMatrix* A, CSCTiledMatrix* B, unsigned int blockDim) {
+    // Check compatibility
+    if(B->numRows != A->numRows || B->numCols != A->numCols) {
+        fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
+        exit(1);
+    }
+    if(B->capacity < A->nnz) {
+        fprintf(stderr, "%s: CSR matrix has insufficient capacity!\n", __func__);
+        exit(1);
+    }
 
+    unsigned int tilesPerRow = (B->numCols + BLOCKDIM - 1)/BLOCKDIM; 
+    unsigned int tilesPerCol = (B->numRows + BLOCKDIM - 1)/BLOCKDIM;
+    
+
+    // Set nonzeros
+    B->nnz = A->nnz;
+
+    // Histogram
+    memset(B->colPtrs, 0, (B->numCols * tilesPerCol  + 1) * sizeof(unsigned int));
+    for(unsigned int i = 0; i < A->nnz; ++i) {
+        unsigned int row  = A->rowIdxs[i];
+        unsigned int col  = A->colIdxs[i];
+        unsigned int tile = col * tilesPerCol +  row/BLOCKDIM; //Double check int division
+        B->colPtrs[tile]++;
+    }
+
+    // Prefix sum
+    unsigned int sum = 0;
+    for(unsigned int col = 0; col < A->numCols * tilesPerCol; ++col) {
+        unsigned int val = B->colPtrs[row];
+        B->colPtrs[row]  = sum;
+        sum += val;
+    }
+    B->colPtrs[A->numCols * tilesPerCol] = sum;
+
+    // Binning
+    for(unsigned int index = 0; index < A->nnz; ++index) {
+        unsigned int row  = A->rowIdxs[index];
+        unsigned int col  = A->colIdxs[index];
+        unsigned int tile = col * tilesPerCol + row/BLOCKDIM;
+
+        unsigned int i = B->colPtrs[tile]++;
+        B->rowIdxs[i]  = A->rowIdxs[index];
+        B->values[i]   = A->values[index];
+    }
+
+    // Restore col pointers
+    for(unsigned int col = (A->numCols * tilesPerCol) - 1; col > 0; --col) {
+        B->colPtrs[col] = B->colPtrs[col - 1];
+    }
+    B->colPtrs[0] = 0;
+
+    // Sort nonzeros within each col
+    for(unsigned int col = 0; col < (B->numCols * tilesPerCol); ++col) {
+        unsigned int start = B->colPtrs[col];
+        unsigned int end   = B->colPtrs[col + 1] - 1;
+        quicksort(B->values, B->rowIdxs, start, end);
+    }
+
+    //Build colPtrsBlock
+    for(unsigned int rowTile = 0; rowTile < tilesPerRow; ++rowTile){
+        for(unsigned int colTile = 0; colTile < tilesPerCol; ++colTile){
+            for(unsigned int col = 0; col < BLOCKDIM; ++col){
+
+                unsigned int colIdx = ((rowTile * tilesPerCol + colTile) * BLOCKDIM) + col;
+
+                if(col == 0) {
+                    B->colPtrsBlock[colIdx] = 0;
+                } else {
+                    B->colPtrsBlock[colIdx] = B->colPtrsBlock[colIdx - 1] + (B->colPtrs[colIdx + tilesPerCol] - B->colPtrs[colIdx]);
+                }
+            }
+        }
+    }
 }
 
 void freeCSCTiled(CSCTiledMatrix* csc) {
