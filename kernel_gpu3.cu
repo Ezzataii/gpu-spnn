@@ -61,38 +61,28 @@ __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias
                     unsigned int numActive = __popc(activeThreads);
 
                     // Have the leader perform the atomic operation
-                    unsigned int j;
+                    unsigned int nnzIdx;
                     if(threadIdx.x%WARP_SIZE == leader) {
-                       j = atomicAdd(M, numActive);
+                       nnzIdx = atomicAdd(&result->nnz, numActive);
                     }
 
                     // Broadcast the result
-                    j = __shfl_sync(activeThreads, j, leader);
+                    nnzIdx = __shfl_sync(activeThreads, nnzIdx, leader);
                     // Find the position of each thread
                     unsigned int previousThreads = (1 << (threadIdx.x%WARP_SIZE)) - 1;
                     unsigned int activePreviousThreads = activeThreads & previousThreads;
                     unsigned int offset = __popc(activePreviousThreads);
 
                     // Store the result
-                    output[j + offset] = val;
-
-                    unsigned int nnzIdx = atomicAdd(&result->nnz, 1);
                     if(sum > YMAX) {
                         sum = YMAX;
                     }
                     if(nnzIdx >= result->capacity) {
                         printf("WE RAN OUT OF CAPACITY\n");
                     }
-                    result->colIdxs[nnzIdx] = col;
-                    result->rowIdxs[nnzIdx] = row;
-                    result->values[nnzIdx]  = sum;
-
-
-
-
-
-
-
+                    result->colIdxs[nnzIdx + offset] = col;
+                    result->rowIdxs[nnzIdx + offset] = row;
+                    result->values[nnzIdx + offset]  = sum;
                 
                 }    
             }        
