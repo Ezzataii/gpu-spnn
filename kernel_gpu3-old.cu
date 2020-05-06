@@ -22,44 +22,61 @@ __global__ void spmspm(COOMatrix *result, CSRTiledMatrix *A, CSCTiledMatrix *B, 
     __shared__ unsigned int Bs_rowIdxs[BLOCKDIM*BLOCKDIM];
     __shared__ float        Bs_values[BLOCKDIM*BLOCKDIM];
 
-
-    //General
-    float sum = 0.0f;
-
-    //Thread
-    unsigned int outRow = blockDim.y * blockIdx.y + threadIdx.y;
-    unsigned int outCol = blockDim.x * blockIdx.x + threadIdx.x;
-
-    //OutCell
+    unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
+    unsigned int col = blockDim.x * blockIdx.x + threadIdx.x;
     unsigned int totalRows = A->numRows; 
     unsigned int totalCols = B->numCols;
 
-    //A (CSR)
-    unsigned int tilesPerRowCSR = (K+BLOCKDIM-1)/BLOCKDIM;
-
-    //B (CSC)
-
+    unsigned int tilesPerDim = K / BLOCKDIM;
+    float sum = 0.0f;
     
     for(unsigned int tile = 0; tile < tilesPerDim; ++tile) {
-        
-        unsigned int tileOffsetCSR = (blockIdx.y * tilesPerRowCSR + tile) * BLOCKDIM //Index of first rowPtr of the tile.
-        unsigned int tileRowPtrCSR = A->rowPtrs[tileOffsetCSR]; //RowPtr value of first row in the tile
-        unsigned int nnzCSRTile = A->rowPtrs[tileOffsetCSR+BLOCKDIM] - tileRowPtrCSR; //Row Pointer of first row of next tile - RowPtr of first row for this tile
+        // 1 thread loads a row and a col.
+        if(threadIdx.x == threadIdx.y){
+            unsigned int nnz_row = 0;
+            unsigned int nnz_col = 0;
 
-        //First thread per row loads a row ptr
-        if(threadIdx.x == 0){
-            As_rowPtrs[threadIdx.y] = A->rowPtrs[tileOffsetCSR+threadIdx.y] - tileRowPtrCSR;
+            if(row < totalRows){
+                As_rowPtrs[threadIdx.y] = A->rowPtrsBlock[row*tilesPerDim + tile];
+                for(unsigned int i = A->rowPtrs[row*tilesPerDim + tile]; i < A->rowPtrs[row*tilesPerDim + tile + 1]; ++i){
+                    As_colIdxs[nnz_row] = A->colIdxs[i];
+                    As_values[nnz_row]  = A->values[i];
+                    nnz_row += 1;
+                }
+            }
+            
+            if(col < totalCols){
+                Bs_colPtrs[threadIdx.x] = B->colPtrsBlock[row*tilesPerDim + tile];
+                for(unsigned int i = B->colPtrs[col*tilesPerDim + tile]; i < B->colPtrs[col*tilesPerDim + tile + 1]; ++i){
+                    Bs_rowIdxs[nnz_col] = B->rowIdxs[i];
+                    Bs_values[nnz_col]  = B->values[i];
+                    nnz_col += 1;
+                }
+            }
+            
+        } else if(threadIdx.x == 0 && threadIdx.y == 1) {
+            if(blockDim.y * (blockIdx.y + 1) > totalRows) {
+                As_rowPtrs[totalRows % BLOCKDIM] = A->rowPtrsBlock[(totalRows - 1)*tilesPerDim + tile] + (A->rowPtrs[(totalRows - 1)*tilesPerDim + tile + 1] - A->rowPtrs[(totalRows - 1)*tilesPerDim + tile]);
+            } else {
+                As_rowPtrs[BLOCKDIM] = 
+                A->rowPtrsBlock[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile] + 
+                (
+                    A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile + 1] -
+                    A->rowPtrs[(blockDim.y * (blockIdx.y + 1) - 1)*tilesPerDim + tile]
+                );
+            }
+            
+            if(blockDim.x * (blockIdx.x + 1) > totalCols) {
+                Bs_colPtrs[totalCols % BLOCKDIM] = B->colPtrsBlock[(totalCols - 1)*tilesPerDim + tile] + (B->colPtrs[(totalCols - 1)*tilesPerDim + tile + 1] - B->colPtrs[(totalCols - 1)*tilesPerDim + tile]);
+            } else {
+                Bs_colPtrs[BLOCKDIM] = 
+                B->colPtrsBlock[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile] + 
+                (
+                    B->colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile + 1] - 
+                    B->colPtrs[(blockDim.x * (blockIdx.x + 1) - 1)*tilesPerDim + tile]
+                );
+            }      
         }
-        // each thread loads one nnz csc and csr
-        unsigned int threadCount = threadIdx.x + threadIdx.y*BLOCKDIM; //Since 2d tile we need a way to index the threads
-        if(threadCount < nnzCSRTile){
-            As_colIdxs[threadCount] = A->colIdxs[tileRowPtrCSR+threadCount]; 
-            As_values[threadCount]  = A->values[tileRowPtrCSR+threadCount];
-        }
-
-        
-
-
         __syncthreads();
 
         // Compute with tile
