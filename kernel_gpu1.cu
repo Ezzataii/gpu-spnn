@@ -209,6 +209,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
         dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
         dim3 blockSize(BLOCKDIM, BLOCKDIM); 
 
+        printf("nnzA:%d nnzB:%d  \n",Yin->nnz,W[layer]->nnz);
         spmspm <<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias);
         
         cudaDeviceSynchronize();
