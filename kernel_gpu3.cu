@@ -170,6 +170,66 @@ CSRMatrix* createEmptyCSR_d_modified(unsigned int numRows, unsigned int numCols,
     cudaDeviceSynchronize();
     return csr_d;
 }
+void convertCOOtoCSR_modified(COOMatrix* A, CSRMatrix* B) {
+
+    unsigned int tilesPerRowCSR = (B->numCols + BLOCKDIM - 1) / BLOCKDIM;
+    // Check compatibility
+    if(B->numRows != A->numRows || B->numCols != A->numCols) {
+        fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
+        exit(1);
+    }
+    if(B->capacity < A->nnz) {
+        fprintf(stderr, "%s: CSR matrix has insufficient capacity!\n", __func__);
+        exit(1);
+    }
+
+    // Set nonzeros
+    B->nnz = A->nnz;
+
+    // Histogram
+    memset(B->rowPtrs, 0, (B->numRows + 1)*sizeof(unsigned int));
+    for(unsigned int i = 0; i < A->nnz; ++i) {
+        unsigned int row  = A->rowIdxs[i];
+        unsigned int col  = A->colIdxs[i];
+        blockIdx = ((row/BLOCKDIM) * tilesPerRowCSR) + (col/BLOCKDIM);
+        localBlockIdx = row%BLOCKDIM;
+        B->rowPtrs[blockIdx*BLOCKDIM + localBlockIdx]++;
+    }
+
+    // Prefix sum
+    unsigned int sum = 0;
+    for(unsigned int row = 0; row < (A->numRows * tilesPerRow); ++row) {
+        unsigned int val = B->rowPtrs[row];
+        B->rowPtrs[row] = sum;
+        sum += val;
+    }
+    B->rowPtrs[A->numRows * tilesPerRow] = sum;
+
+    // Binning
+    for(unsigned int index = 0; index < A->nnz; ++index) {
+        unsigned int row = A->rowIdxs[index];
+        unsigned int col = A->colIdxs[index];
+        blockIdx = ((row/BLOCKDIM) * tilesPerRowCSR) + (col/BLOCKDIM);
+        localBlockIdx = row%BLOCKDIM;
+        unsigned int i = B->rowPtrs[blockIdx*BLOCKDIM + localBlockIdx]++;
+        B->colIdxs[i] = A->colIdxs[index];
+        B->values[i] = A->values[index];
+    }
+
+    // Restore row pointers
+    for(unsigned int row = A->numRows*tilesPerRow - 1; row > 0; --row) {
+        B->rowPtrs[row] = B->rowPtrs[row - 1];
+    }
+    B->rowPtrs[0] = 0;
+
+    // Sort nonzeros within each row
+    for(unsigned int rowPtrIdx = 0; rowPtrIdx < B->numRows*tilesPerRow; ++rowPtrIdx) {
+        unsigned int start = B->rowPtrs[rowPtrIdx];
+        unsigned int end = B->rowPtrs[rowPtrIdx + 1] - 1;
+        quicksort(B->values, B->colIdxs, start, end);
+    }
+
+}
 //ConverCSCFromCOO_modified here
 CSCMatrix* createCSCfromCSC_d_modified(CSCMatrix* csc) {
     unsigned int tilesPerCol = (csc->numRows + BLOCKDIM - 1)/BLOCKDIM;
@@ -232,6 +292,8 @@ void copyCSRtoGPU(CSRMatrix* csr, CSRMatrix* csr_d) {
 
 
 //Not Yet Done
+
+
 CSCMatrix* convertCSCfromCOO_modified(COOMatrix* A) {
 
     // Allocate
@@ -281,59 +343,6 @@ CSCMatrix* convertCSCfromCOO_modified(COOMatrix* A) {
 
 }
 
-void convertCOOtoCSR_modified(COOMatrix* A, CSRMatrix* B) {
-
-    // Check compatibility
-    if(B->numRows != A->numRows || B->numCols != A->numCols) {
-        fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
-        exit(1);
-    }
-    if(B->capacity < A->nnz) {
-        fprintf(stderr, "%s: CSR matrix has insufficient capacity!\n", __func__);
-        exit(1);
-    }
-
-    // Set nonzeros
-    B->nnz = A->nnz;
-
-    // Histogram
-    memset(B->rowPtrs, 0, (B->numRows + 1)*sizeof(unsigned int));
-    for(unsigned int i = 0; i < A->nnz; ++i) {
-        unsigned int row = A->rowIdxs[i];
-        B->rowPtrs[row]++;
-    }
-
-    // Prefix sum
-    unsigned int sum = 0;
-    for(unsigned int row = 0; row < A->numRows; ++row) {
-        unsigned int val = B->rowPtrs[row];
-        B->rowPtrs[row] = sum;
-        sum += val;
-    }
-    B->rowPtrs[A->numRows] = sum;
-
-    // Binning
-    for(unsigned int index = 0; index < A->nnz; ++index) {
-        unsigned int row = A->rowIdxs[index];
-        unsigned int i = B->rowPtrs[row]++;
-        B->colIdxs[i] = A->colIdxs[index];
-        B->values[i] = A->values[index];
-    }
-
-    // Restore row pointers
-    for(unsigned int row = A->numRows - 1; row > 0; --row) {
-        B->rowPtrs[row] = B->rowPtrs[row - 1];
-    }
-    B->rowPtrs[0] = 0;
-
-    // Sort nonzeros within each row
-    for(unsigned int row = 0; row < B->numRows; ++row) {
-        unsigned int start = B->rowPtrs[row];
-        unsigned int end = B->rowPtrs[row + 1] - 1;
-        quicksort(B->values, B->colIdxs, start, end);
-    }
-
-}
 
 
 
