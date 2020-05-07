@@ -8,7 +8,7 @@
 
 #define THRESHOLD 0.000001
 #define YMAX 32
-#define BLOCKDIM 32
+#define BLOCKDIM 16
 
 __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias) {
     unsigned int row = blockDim.x * blockIdx.x + threadIdx.x;

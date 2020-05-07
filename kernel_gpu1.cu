@@ -8,7 +8,7 @@
 
 #define THRESHOLD 0.000001
 #define YMAX 32
-#define BLOCKDIM 32
+#define BLOCKDIM 16
 
 __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias) {
     unsigned int row = blockDim.y * blockIdx.y + threadIdx.y;
@@ -194,6 +194,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     COOMatrix *Yout   = tmp;
     CSRMatrix *Yin_d  = Y0_d;
     COOMatrix *Yout_d = tmp_d;
+    unsigned int total = 0;
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
 
         printf("Computing layer %u (SpMSpM)\n", layer);
@@ -208,8 +209,6 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
         startTime(&timer);
         dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
         dim3 blockSize(BLOCKDIM, BLOCKDIM); 
-
-        printf("nnzA:%d nnzB:%d  \n",Yin->nnz,W[layer]->nnz);
         spmspm <<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias);
         
         cudaDeviceSynchronize();
@@ -220,7 +219,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
         copyCOOfromGPU(Yout_d, Yout);
         stopTimeAndPrint(&timer, "    Copy COO from GPU");
         printf("    Output matrix number of nonzeros: %d\n", Yout->nnz);
-
+        total += Yout->nnz;
         // Convert COO to CSR
         startTime(&timer);
         convertCOOtoCSR(Yout, Yin);
@@ -241,6 +240,5 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     }
     freeCOO(tmp);
     stopTimeAndPrint(&timer, "Deallocate memory");
-
 }
 

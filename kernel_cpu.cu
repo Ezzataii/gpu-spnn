@@ -92,7 +92,7 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     startTime(&timer);
     CSCMatrix* W[numLayers];
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-        W[layer] = createCSCfromCOO(layerWeights[layer]);
+        W[layer] = convertCSCfromCOO(layerWeights[layer]);
     }
     stopTimeAndPrint(&timer, "Convert weights to CSR");
 

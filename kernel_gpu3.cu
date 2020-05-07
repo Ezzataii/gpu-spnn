@@ -11,6 +11,7 @@
 #define BLOCKDIM 32
 
 __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias, unsigned int K, unsigned int N, unsigned int M) {
+    
     __shared__ unsigned int As_rowPtrs[BLOCKDIM + 1];
     __shared__ unsigned int As_colIdxs[BLOCKDIM*BLOCKDIM];
     __shared__ float        As_values[BLOCKDIM*BLOCKDIM];
@@ -19,13 +20,15 @@ __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias
     __shared__ unsigned int Bs_rowIdxs[BLOCKDIM*BLOCKDIM];
     __shared__ float        Bs_values[BLOCKDIM*BLOCKDIM];
 
+    
+    // __syncthreads();
     float sum = 0.0f;
 
     //Thread
     unsigned int outRow = blockDim.y * blockIdx.y + threadIdx.y;
     unsigned int outCol = blockDim.x * blockIdx.x + threadIdx.x;
 
-    //OutCell
+    //OutCOO
     unsigned int totalRows = A->numRows; 
     unsigned int totalCols = B->numCols;
 
@@ -45,22 +48,24 @@ __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias
         unsigned int tileOffsetCSC = (blockIdx.x * tilesPerColCSC + tile) * BLOCKDIM; //Index of first colPtr of the tile.
         unsigned int tileColPtrCSC = B->colPtrs[tileOffsetCSC]; //ColPtr value of first col in the tile
         unsigned int nnzCSCTile = B->colPtrs[tileOffsetCSC+BLOCKDIM] - tileColPtrCSC; //Row Pointer of first row of next tile - RowPtr of first row for this tile
-
         unsigned int threadCount = threadIdx.x + threadIdx.y*BLOCKDIM; //Since 2d tile we need a way to index the threads
 
         //First thread per row loads a row ptr
         if(threadIdx.x == 0 && outRow < totalRows){
             As_rowPtrs[threadIdx.y] = A->rowPtrs[tileOffsetCSR+threadIdx.y] - tileRowPtrCSR;
         }
-
         //First thread per col loads a col ptr
         if(threadIdx.y == 0 && outCol < totalCols){
             Bs_colPtrs[threadIdx.x] = B->colPtrs[tileOffsetCSC+threadIdx.x] - tileColPtrCSC;
         }
+        if(threadIdx.x == 0 && threadIdx.y == 0){ //Double check for boundary condition later (minor difference)
+            As_rowPtrs[BLOCKDIM] = A->rowPtrs[tileOffsetCSR+BLOCKDIM] - tileRowPtrCSR;
+            Bs_colPtrs[BLOCKDIM] = B->colPtrs[tileOffsetCSC+BLOCKDIM] - tileColPtrCSC;   
+        }
 
-        //Each thread loads one nnz csc and csr
+        //Each thread loads one nnz for csc and one nnz for csr
         if(threadCount < nnzCSRTile){
-            As_colIdxs[threadCount] = A->colIdxs[tileRowPtrCSR+threadCount]; 
+            As_colIdxs[threadCount] = A->colIdxs[tileRowPtrCSR+threadCount];  
             As_values[threadCount]  = A->values[tileRowPtrCSR+threadCount];
         }
         
@@ -72,8 +77,8 @@ __global__ void spmspm(COOMatrix *result, CSRMatrix *A, CSCMatrix *B, float bias
 
         // Compute with tile
         if(outRow < M && outCol < N){
-            unsigned int nnzA = nnzCSRTile;
-            unsigned int nnzB = nnzCSCTile;
+            unsigned int nnzA = As_rowPtrs[threadIdx.y+1]-As_rowPtrs[threadIdx.y];
+            unsigned int nnzB = Bs_colPtrs[threadIdx.x+1]-Bs_colPtrs[threadIdx.x];
 
             if(nnzA > 0 && nnzB > 0) {
                 unsigned int rowPtrA = As_rowPtrs[threadIdx.y];
@@ -189,6 +194,128 @@ CSRMatrix* createEmptyCSR_d_modified(unsigned int numRows, unsigned int numCols,
     cudaDeviceSynchronize();
     return csr_d;
 }
+CSCMatrix* createCSCfromCSC_d_modified(CSCMatrix* csc) {
+    unsigned int tilesPerCol = (csc->numRows + BLOCKDIM - 1)/BLOCKDIM;
+    CSCMatrix cscShadow;
+    cscShadow.numRows = csc->numRows;
+    cscShadow.numCols = csc->numCols;
+    cscShadow.nnz = csc->nnz;
+    cscShadow.capacity = csc->capacity;
+    cudaMalloc((void**) &cscShadow.colPtrs, (csc->numCols * tilesPerCol + 1)*sizeof(unsigned int));
+    cudaMalloc((void**) &cscShadow.rowIdxs, csc->capacity*sizeof(unsigned int));
+    cudaMalloc((void**) &cscShadow.values, csc->capacity*sizeof(float));
+    cudaMemcpy(cscShadow.colPtrs, csc->colPtrs, (csc->numCols * tilesPerCol + 1)*sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(cscShadow.rowIdxs, csc->rowIdxs, csc->capacity*sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(cscShadow.values, csc->values, csc->capacity*sizeof(float), cudaMemcpyHostToDevice);
+    CSCMatrix* csc_d;
+    cudaMalloc((void**) &csc_d, sizeof(CSCMatrix));
+    cudaMemcpy(csc_d, &cscShadow, sizeof(CSCMatrix), cudaMemcpyHostToDevice);
+    cudaDeviceSynchronize();
+    return csc_d;
+}
+COOMatrix* createEmptyCOO_d(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
+    COOMatrix cooShadow;
+    cooShadow.numRows = numRows;
+    cooShadow.numCols = numCols;
+    cooShadow.nnz = 0;
+    cooShadow.capacity = capacity;
+    cudaMalloc((void**) &cooShadow.rowIdxs, capacity*sizeof(unsigned int));
+    cudaMalloc((void**) &cooShadow.colIdxs, capacity*sizeof(unsigned int));
+    cudaMalloc((void**) &cooShadow.values, capacity*sizeof(float));
+    COOMatrix* coo_d;
+    cudaMalloc((void**) &coo_d, sizeof(COOMatrix));
+    cudaMemcpy(coo_d, &cooShadow, sizeof(COOMatrix), cudaMemcpyHostToDevice);
+    cudaDeviceSynchronize();
+    return coo_d;
+}
+void copyCOOfromGPU(COOMatrix* coo_d, COOMatrix* coo) {
+    COOMatrix cooShadow;
+    cudaMemcpy(&cooShadow, coo_d, sizeof(COOMatrix), cudaMemcpyDeviceToHost);
+    assert(coo->numRows == cooShadow.numRows);
+    assert(coo->numCols == cooShadow.numCols);
+    assert(coo->capacity >= cooShadow.nnz);
+    coo->nnz = cooShadow.nnz;
+    cudaMemcpy(coo->rowIdxs, cooShadow.rowIdxs, cooShadow.nnz*sizeof(unsigned int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(coo->colIdxs, cooShadow.colIdxs, cooShadow.nnz*sizeof(unsigned int), cudaMemcpyDeviceToHost);
+    cudaMemcpy(coo->values, cooShadow.values, cooShadow.nnz*sizeof(float), cudaMemcpyDeviceToHost);
+    cudaDeviceSynchronize();
+}
+void copyCSRtoGPU(CSRMatrix* csr, CSRMatrix* csr_d) {
+    unsigned int tilesPerRow = (csr->numCols + BLOCKDIM - 1)/ BLOCKDIM;
+    CSRMatrix csrShadow;
+    cudaMemcpy(&csrShadow, csr_d, sizeof(CSRMatrix), cudaMemcpyDeviceToHost);
+    assert(csrShadow.numRows == csr->numRows);
+    assert(csrShadow.numCols == csr->numCols);
+    assert(csrShadow.capacity >= csr->nnz);
+    csrShadow.nnz = csr->nnz;
+    cudaMemcpy(csrShadow.rowPtrs, csr->rowPtrs, (csr->numRows*tilesPerRow + 1)*sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(csrShadow.colIdxs, csr->colIdxs, csr->nnz*sizeof(unsigned int), cudaMemcpyHostToDevice);
+    cudaMemcpy(csrShadow.values, csr->values, csr->nnz*sizeof(float), cudaMemcpyHostToDevice);
+    cudaDeviceSynchronize();
+}
+
+//Conversions
+void convertCOOtoCSR_modified(COOMatrix* A, CSRMatrix* B) {
+
+    unsigned int tilesPerRowCSR = (B->numCols + BLOCKDIM - 1) / BLOCKDIM;
+    // Check compatibility
+    if(B->numRows != A->numRows || B->numCols != A->numCols) {
+        fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
+        exit(1);
+    }
+    if(B->capacity < A->nnz) {
+        fprintf(stderr, "%s: CSR matrix has insufficient capacity!\n", __func__);
+        exit(1);
+    }
+
+    // Set nonzeros
+    B->nnz = A->nnz;
+
+    // Histogram
+    memset(B->rowPtrs, 0, (B->numRows*tilesPerRowCSR + 1)*sizeof(unsigned int));
+    for(unsigned int i = 0; i < A->nnz; ++i) {
+        unsigned int row  = A->rowIdxs[i];
+        unsigned int col  = A->colIdxs[i];
+        unsigned int blockIdx = ((row/BLOCKDIM) * tilesPerRowCSR) + (col/BLOCKDIM);
+        unsigned int localBlockIdx = row%BLOCKDIM;
+        B->rowPtrs[blockIdx*BLOCKDIM + localBlockIdx]++;
+    }
+
+    // Prefix sum
+    unsigned int sum = 0;
+    for(unsigned int row = 0; row < (A->numRows * tilesPerRowCSR); ++row) {
+        unsigned int val = B->rowPtrs[row];
+        B->rowPtrs[row] = sum;
+        sum += val;
+    }
+    B->rowPtrs[A->numRows * tilesPerRowCSR] = sum;
+
+    // Binning
+    for(unsigned int index = 0; index < A->nnz; ++index) {
+        unsigned int row = A->rowIdxs[index];
+        unsigned int col = A->colIdxs[index];
+        unsigned int blockIdx = ((row/BLOCKDIM) * tilesPerRowCSR) + (col/BLOCKDIM);
+        unsigned int localBlockIdx = row%BLOCKDIM;
+        unsigned int i = B->rowPtrs[blockIdx*BLOCKDIM + localBlockIdx]++;
+        B->colIdxs[i] = A->colIdxs[index];
+        B->values[i] = A->values[index];
+    }
+
+    // Restore row pointers
+    for(unsigned int row = A->numRows*tilesPerRowCSR - 1; row > 0; --row) {
+        B->rowPtrs[row] = B->rowPtrs[row - 1];
+    }
+    B->rowPtrs[0] = 0;
+
+    // Sort nonzeros within each row
+    for(unsigned int rowPtrIdx = 0; rowPtrIdx < B->numRows*tilesPerRowCSR; ++rowPtrIdx) {
+        unsigned int start = B->rowPtrs[rowPtrIdx];
+        unsigned int end = B->rowPtrs[rowPtrIdx + 1] - 1;
+        quicksort_2(B->values, B->colIdxs, start, end);
+    }
+
+}
+
 CSCMatrix* convertCSCfromCOO_modified(COOMatrix* A) {
     unsigned int tilesPerColCSC = (A->numRows + BLOCKDIM - 1) / BLOCKDIM;
 
@@ -254,138 +381,16 @@ CSCMatrix* convertCSCfromCOO_modified(COOMatrix* A) {
     return B;
 
 }
-void convertCOOtoCSR_modified(COOMatrix* A, CSRMatrix* B) {
-
-    unsigned int tilesPerRowCSR = (B->numCols + BLOCKDIM - 1) / BLOCKDIM;
-    // Check compatibility
-    if(B->numRows != A->numRows || B->numCols != A->numCols) {
-        fprintf(stderr, "%s: matrices have incompatible dimensions!\n", __func__);
-        exit(1);
-    }
-    if(B->capacity < A->nnz) {
-        fprintf(stderr, "%s: CSR matrix has insufficient capacity!\n", __func__);
-        exit(1);
-    }
-
-    // Set nonzeros
-    B->nnz = A->nnz;
-
-    // Histogram
-    memset(B->rowPtrs, 0, (B->numRows*tilesPerRowCSR + 1)*sizeof(unsigned int));
-    for(unsigned int i = 0; i < A->nnz; ++i) {
-        unsigned int row  = A->rowIdxs[i];
-        unsigned int col  = A->colIdxs[i];
-        unsigned int blockIdx = ((row/BLOCKDIM) * tilesPerRowCSR) + (col/BLOCKDIM);
-        unsigned int localBlockIdx = row%BLOCKDIM;
-        B->rowPtrs[blockIdx*BLOCKDIM + localBlockIdx]++;
-    }
-
-    // Prefix sum
-    unsigned int sum = 0;
-    for(unsigned int row = 0; row < (A->numRows * tilesPerRowCSR); ++row) {
-        unsigned int val = B->rowPtrs[row];
-        B->rowPtrs[row] = sum;
-        sum += val;
-    }
-    B->rowPtrs[A->numRows * tilesPerRowCSR] = sum;
-
-    // Binning
-    for(unsigned int index = 0; index < A->nnz; ++index) {
-        unsigned int row = A->rowIdxs[index];
-        unsigned int col = A->colIdxs[index];
-        unsigned int blockIdx = ((row/BLOCKDIM) * tilesPerRowCSR) + (col/BLOCKDIM);
-        unsigned int localBlockIdx = row%BLOCKDIM;
-        unsigned int i = B->rowPtrs[blockIdx*BLOCKDIM + localBlockIdx]++;
-        B->colIdxs[i] = A->colIdxs[index];
-        B->values[i] = A->values[index];
-    }
-
-    // Restore row pointers
-    for(unsigned int row = A->numRows*tilesPerRowCSR - 1; row > 0; --row) {
-        B->rowPtrs[row] = B->rowPtrs[row - 1];
-    }
-    B->rowPtrs[0] = 0;
-
-    // Sort nonzeros within each row
-    for(unsigned int rowPtrIdx = 0; rowPtrIdx < B->numRows*tilesPerRowCSR; ++rowPtrIdx) {
-        unsigned int start = B->rowPtrs[rowPtrIdx];
-        unsigned int end = B->rowPtrs[rowPtrIdx + 1] - 1;
-        quicksort_2(B->values, B->colIdxs, start, end);
-    }
-
-}
-CSCMatrix* createCSCfromCSC_d_modified(CSCMatrix* csc) {
-    unsigned int tilesPerCol = (csc->numRows + BLOCKDIM - 1)/BLOCKDIM;
-    CSCMatrix cscShadow;
-    cscShadow.numRows = csc->numRows;
-    cscShadow.numCols = csc->numCols;
-    cscShadow.nnz = csc->nnz;
-    cscShadow.capacity = csc->capacity;
-    cudaMalloc((void**) &cscShadow.colPtrs, (csc->numCols * tilesPerCol + 1)*sizeof(unsigned int));
-    cudaMalloc((void**) &cscShadow.rowIdxs, csc->capacity*sizeof(unsigned int));
-    cudaMalloc((void**) &cscShadow.values, csc->capacity*sizeof(float));
-    cudaMemcpy(cscShadow.colPtrs, csc->colPtrs, (csc->numCols * tilesPerCol + 1)*sizeof(unsigned int), cudaMemcpyHostToDevice);
-    cudaMemcpy(cscShadow.rowIdxs, csc->rowIdxs, csc->capacity*sizeof(unsigned int), cudaMemcpyHostToDevice);
-    cudaMemcpy(cscShadow.values, csc->values, csc->capacity*sizeof(float), cudaMemcpyHostToDevice);
-    CSCMatrix* csc_d;
-    cudaMalloc((void**) &csc_d, sizeof(CSCMatrix));
-    cudaMemcpy(csc_d, &cscShadow, sizeof(CSCMatrix), cudaMemcpyHostToDevice);
-    cudaDeviceSynchronize();
-    return csc_d;
-}
-COOMatrix* createEmptyCOO_d(unsigned int numRows, unsigned int numCols, unsigned int capacity) {
-    COOMatrix cooShadow;
-    cooShadow.numRows = numRows;
-    cooShadow.numCols = numCols;
-    cooShadow.nnz = 0;
-    cooShadow.capacity = capacity;
-    cudaMalloc((void**) &cooShadow.rowIdxs, capacity*sizeof(unsigned int));
-    cudaMalloc((void**) &cooShadow.colIdxs, capacity*sizeof(unsigned int));
-    cudaMalloc((void**) &cooShadow.values, capacity*sizeof(float));
-    COOMatrix* coo_d;
-    cudaMalloc((void**) &coo_d, sizeof(COOMatrix));
-    cudaMemcpy(coo_d, &cooShadow, sizeof(COOMatrix), cudaMemcpyHostToDevice);
-    cudaDeviceSynchronize();
-    return coo_d;
-}
-void copyCOOfromGPU(COOMatrix* coo_d, COOMatrix* coo) {
-    COOMatrix cooShadow;
-    cudaMemcpy(&cooShadow, coo_d, sizeof(COOMatrix), cudaMemcpyDeviceToHost);
-    assert(coo->numRows == cooShadow.numRows);
-    assert(coo->numCols == cooShadow.numCols);
-    assert(coo->capacity >= cooShadow.nnz);
-    coo->nnz = cooShadow.nnz;
-    cudaMemcpy(coo->rowIdxs, cooShadow.rowIdxs, cooShadow.nnz*sizeof(unsigned int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(coo->colIdxs, cooShadow.colIdxs, cooShadow.nnz*sizeof(unsigned int), cudaMemcpyDeviceToHost);
-    cudaMemcpy(coo->values, cooShadow.values, cooShadow.nnz*sizeof(float), cudaMemcpyDeviceToHost);
-    cudaDeviceSynchronize();
-}
-void copyCSRtoGPU(CSRMatrix* csr, CSRMatrix* csr_d) {
-    unsigned int tilesPerRow = (csr->numCols + BLOCKDIM - 1)/ BLOCKDIM;
-    CSRMatrix csrShadow;
-    cudaMemcpy(&csrShadow, csr_d, sizeof(CSRMatrix), cudaMemcpyDeviceToHost);
-    assert(csrShadow.numRows == csr->numRows);
-    assert(csrShadow.numCols == csr->numCols);
-    assert(csrShadow.capacity >= csr->nnz);
-    csrShadow.nnz = csr->nnz;
-    cudaMemcpy(csrShadow.rowPtrs, csr->rowPtrs, (csr->numRows*tilesPerRow + 1)*sizeof(unsigned int), cudaMemcpyHostToDevice);
-    cudaMemcpy(csrShadow.colIdxs, csr->colIdxs, csr->nnz*sizeof(unsigned int), cudaMemcpyHostToDevice);
-    cudaMemcpy(csrShadow.values, csr->values, csr->nnz*sizeof(float), cudaMemcpyHostToDevice);
-    cudaDeviceSynchronize();
-}
-
-
 
 
 void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeights, float bias, unsigned int numLayers) {
-
     Timer timer;
 
     // Convert featureVectors to CSR
     startTime(&timer);
-    CSRMatrix* Y0 = createEmptyCSR_modified(featureVectors->numRows, featureVectors->numCols, 16*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
+    CSRMatrix* Y0 = createEmptyCSR_modified(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
     convertCOOtoCSR_modified(featureVectors, Y0);
-    CSRMatrix* Y0_d = createEmptyCSR_d_modified(featureVectors->numRows, featureVectors->numCols, 16*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
+    CSRMatrix* Y0_d = createEmptyCSR_d_modified(featureVectors->numRows, featureVectors->numCols, 4*featureVectors->nnz); // Assuming 4*nnz is enough for all Y vectors
     stopTimeAndPrint(&timer, "Convert feature vectors to CSR");
 
     // Convert layer weights to CSC
@@ -409,12 +414,8 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
     COOMatrix *Yout   = tmp;
     CSRMatrix *Yin_d  = Y0_d;
     COOMatrix *Yout_d = tmp_d;
+    unsigned int total = 0;
     for(unsigned int layer = 0; layer < numLayers; ++layer) {
-
-        if(layer == 1){
-            break;
-        }
-
         printf("Computing layer %u (SpMSpM)\n", layer);
 
         // Copy to GPU
@@ -424,11 +425,10 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
         stopTimeAndPrint(&timer, "    Copy CSR to GPU and clear COO");
 
         // SpMSpM
-        startTime(&timer);  
+        startTime(&timer);
         dim3 gridSize( (W[layer]->numCols + BLOCKDIM - 1) / BLOCKDIM,  (Yin->numRows + BLOCKDIM - 1) / BLOCKDIM);
         dim3 blockSize(BLOCKDIM, BLOCKDIM); 
 
-        printf("nnzA:%d nnzB:%d  \n",Yin->nnz,W[layer]->nnz);
         spmspm<<<gridSize, blockSize>>> (Yout_d, Yin_d , W_d[layer], bias, W[layer]->numRows, W[layer]->numCols, Yin->numRows);
 
         cudaDeviceSynchronize();
@@ -439,10 +439,15 @@ void sparseNN(Vector* result, COOMatrix* featureVectors, COOMatrix** layerWeight
         copyCOOfromGPU(Yout_d, Yout);
         stopTimeAndPrint(&timer, "    Copy COO from GPU");
         printf("    Output matrix number of nonzeros: %d\n", Yout->nnz);
+        total += Yout->nnz;
 
         // Convert COO to CSR
         startTime(&timer);
-        convertCOOtoCSR_modified(Yout, Yin);
+        if(layer == numLayers-1){
+            convertCOOtoCSR(Yout, Yin);
+        }else{
+            convertCOOtoCSR_modified(Yout, Yin);
+        }
         stopTimeAndPrint(&timer, "    Converting COO to CSR");
 
     }
